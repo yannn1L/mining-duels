@@ -99,9 +99,9 @@ export const CFG = {
       OFFSET_X: 0,
       OFFSET_Y: -80,
       TIMER_HUD: {
-        OFFSET_Y: 220,
-        TITLE_FONT_SIZE: 25,
-        TIMER_FONT_SIZE: 18
+        OFFSET_Y: 200,
+        TITLE_FONT_SIZE: 35,
+        TIMER_FONT_SIZE: 28
       },
       TELEMETRY_BAR: {
         SHOW: true,
@@ -124,7 +124,7 @@ export const CFG = {
         ICON_SPRITE_SIZE: 20,
         NAME_FONT_SIZE: 11,
         DESC_FONT_SIZE: 10,
-        DESC_MAX_LINES: 2
+        DESC_MAX_LINES: 1
       }
     } as OrientationLayoutConfig,
 
