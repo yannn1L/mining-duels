@@ -5,6 +5,7 @@ import { Textures } from './textures';
 
 interface PhysicsParticle extends PIXI.Sprite {
   active: boolean;
+  activeIdx: number;
   vx: number;
   vy: number;
   life: number;
@@ -16,6 +17,7 @@ interface PhysicsParticle extends PIXI.Sprite {
 
 interface ShockwaveSprite extends PIXI.Sprite {
   active: boolean;
+  activeIdx: number;
   radius: number;
   maxRadius: number;
   life: number;
@@ -24,6 +26,7 @@ interface ShockwaveSprite extends PIXI.Sprite {
 
 interface LaserGfx extends PIXI.Graphics {
   active: boolean;
+  activeIdx: number;
   sx: number;
   sy: number;
   ex: number;
@@ -37,6 +40,7 @@ interface LaserGfx extends PIXI.Graphics {
 
 interface DmgTextContainer extends PIXI.Container {
   active: boolean;
+  activeIdx: number;
   vx: number;
   vy: number;
   fx: number;
@@ -51,12 +55,19 @@ export class VFXPool {
   private txts: DmgTextContainer[] = [];
   private lzs: LaserGfx[] = [];
   private sws: ShockwaveSprite[] = [];
+
+  private activePhys: PhysicsParticle[] = [];
+  private activeTxts: DmgTextContainer[] = [];
+  private activeLzs: LaserGfx[] = [];
+  private activeSws: ShockwaveSprite[] = [];
+
   private pIdx = 0;
   private tIdx = 0;
   private lIdx = 0;
   private sIdx = 0;
   private _warnedMissing = new Set<string>();
   public destroyed = false;
+  public lod = 1.0;
 
   constructor(c: PIXI.Container) {
     this.c = c;
@@ -64,6 +75,7 @@ export class VFXPool {
     for (let i = 0; i < CFG.VFX.PHYSICS_LIMIT; i++) {
       const s = new PIXI.Sprite() as PhysicsParticle;
       s.visible = s.active = false;
+      s.activeIdx = -1;
       s.anchor.set(0.5);
       this.c.addChild(s);
       this.phys.push(s);
@@ -72,6 +84,7 @@ export class VFXPool {
     for (let i = 0; i < CFG.VFX.TEXT_LIMIT; i++) {
       const cnt = new PIXI.Container() as DmgTextContainer;
       cnt.visible = cnt.active = false;
+      cnt.activeIdx = -1;
       cnt.fx = 0;
       cnt.fy = 0;
       for (let j = 0; j < 5; j++) {
@@ -87,6 +100,7 @@ export class VFXPool {
     for (let i = 0; i < 20; i++) {
       const lz = new PIXI.Graphics() as LaserGfx;
       lz.visible = lz.active = false;
+      lz.activeIdx = -1;
       this.c.addChild(lz);
       this.lzs.push(lz);
     }
@@ -95,9 +109,14 @@ export class VFXPool {
       const sw = new PIXI.Sprite(Textures['fx_ring']) as ShockwaveSprite;
       sw.anchor.set(0.5);
       sw.visible = sw.active = false;
+      sw.activeIdx = -1;
       this.c.addChild(sw);
       this.sws.push(sw);
     }
+  }
+
+  public get activeCount(): number {
+    return this.activePhys.length;
   }
 
   public destroy(): void {
@@ -106,6 +125,10 @@ export class VFXPool {
     this.txts.length = 0;
     this.lzs.length = 0;
     this.sws.length = 0;
+    this.activePhys.length = 0;
+    this.activeTxts.length = 0;
+    this.activeLzs.length = 0;
+    this.activeSws.length = 0;
   }
 
   private _warnOnce(key: string, msg: string): void {
@@ -128,12 +151,18 @@ export class VFXPool {
     if (this.destroyed || !this.c || this.c.destroyed || this.phys.length === 0) {
       return null;
     }
+    if (l <= 0) return null;
+
+    // Dynamic throttling for ambient/secondary particles when frame rate dips or pool saturates
+    if (this.lod < 0.96 && (t === 'fx_dust' || l > 6)) {
+      if (FastMath.rand() > this.lod) return null;
+    }
+
     const tex = Textures[t];
     if (!tex) {
       this._warnOnce(t, `Missing texture "${t}" — spawn skipped.`);
       return null;
     }
-    if (l <= 0) return null;
 
     this.pIdx = (this.pIdx + 1) % this.phys.length;
     const s = this.phys[this.pIdx];
@@ -151,6 +180,10 @@ export class VFXPool {
     s.alpha = 1;
     s.scale.set(1);
     s.rotation = FastMath.randRange(0, 6);
+    if (s.activeIdx === -1) {
+      s.activeIdx = this.activePhys.length;
+      this.activePhys.push(s);
+    }
     return s;
   }
 
@@ -178,6 +211,10 @@ export class VFXPool {
     sw.active = sw.visible = true;
     sw.alpha = 1;
     sw.scale.set(0.1);
+    if (sw.activeIdx === -1) {
+      sw.activeIdx = this.activeSws.length;
+      this.activeSws.push(sw);
+    }
   }
 
   public spawnLaser(
@@ -207,6 +244,10 @@ export class VFXPool {
     z.active = z.visible = true;
     z.alpha = 1;
     z.jagged = Boolean(jagged);
+    if (z.activeIdx === -1) {
+      z.activeIdx = this.activeLzs.length;
+      this.activeLzs.push(z);
+    }
   }
 
   public spawnDmgText(pX: number, pY: number, dmg: number, color = 0xff0000): void {
@@ -250,39 +291,64 @@ export class VFXPool {
     t.life = t.maxL = CFG.VFX.TEXT_LIFE;
     t.active = t.visible = true;
     t.alpha = 1;
-    // Keep scale at crisp 1.0 (no fractional 0.5 downscaling blur)
     t.scale.set(1);
+    if (t.activeIdx === -1) {
+      t.activeIdx = this.activeTxts.length;
+      this.activeTxts.push(t);
+    }
   }
 
   public update(timeScale = 1.0): void {
     if (this.destroyed || !this.c || this.c.destroyed) return;
-    const pDragX = Math.pow(CFG.PHYSICS.DRAG_X, timeScale);
-    const pDragY = Math.pow(CFG.PHYSICS.DRAG_Y, timeScale);
+    const unitScale = Math.abs(timeScale - 1.0) < 0.04;
+    const pDragX = unitScale ? CFG.PHYSICS.DRAG_X : Math.pow(CFG.PHYSICS.DRAG_X, timeScale);
+    const pDragY = unitScale ? CFG.PHYSICS.DRAG_Y : Math.pow(CFG.PHYSICS.DRAG_Y, timeScale);
 
-    for (let i = 0, len = this.phys.length; i < len; i++) {
-      const s = this.phys[i];
-      if (!s.active) continue;
+    const aPhys = this.activePhys;
+    for (let i = aPhys.length - 1; i >= 0; i--) {
+      const s = aPhys[i];
       s.life -= timeScale;
       if (s.life <= 0) {
         s.active = s.visible = false;
+        const last = aPhys.pop()!;
+        if (last !== s) {
+          aPhys[i] = last;
+          last.activeIdx = i;
+        }
+        s.activeIdx = -1;
         continue;
       }
       s.vy += 0.5 * timeScale;
-      s.vx *= s.dragX === CFG.PHYSICS.DRAG_X ? pDragX : Math.pow(s.dragX, timeScale);
-      s.vy *= s.dragY === CFG.PHYSICS.DRAG_Y ? pDragY : Math.pow(s.dragY, timeScale);
-      s.x += s.vx * timeScale;
-      s.y += s.vy * timeScale;
-      s.rotation += s.vx * 0.1 * timeScale;
-      s.alpha = s.life / s.maxL < 0.1 ? 0.1 : s.life / s.maxL;
-      if (s.scaleDecay) s.scale.set(s.life / s.maxL);
+      if (unitScale) {
+        s.vx *= s.dragX;
+        s.vy *= s.dragY;
+        s.x += s.vx;
+        s.y += s.vy;
+        s.rotation += s.vx * 0.1;
+      } else {
+        s.vx *= s.dragX === CFG.PHYSICS.DRAG_X ? pDragX : Math.pow(s.dragX, timeScale);
+        s.vy *= s.dragY === CFG.PHYSICS.DRAG_Y ? pDragY : Math.pow(s.dragY, timeScale);
+        s.x += s.vx * timeScale;
+        s.y += s.vy * timeScale;
+        s.rotation += s.vx * 0.1 * timeScale;
+      }
+      const ratio = s.life / s.maxL;
+      s.alpha = ratio < 0.1 ? 0.1 : ratio;
+      if (s.scaleDecay) s.scale.set(ratio);
     }
 
-    for (let i = 0, len = this.sws.length; i < len; i++) {
-      const s = this.sws[i];
-      if (!s.active) continue;
+    const aSws = this.activeSws;
+    for (let i = aSws.length - 1; i >= 0; i--) {
+      const s = aSws[i];
       s.life -= timeScale;
       if (s.life <= 0) {
         s.active = s.visible = false;
+        const last = aSws.pop()!;
+        if (last !== s) {
+          aSws[i] = last;
+          last.activeIdx = i;
+        }
+        s.activeIdx = -1;
         continue;
       }
       s.radius += (s.maxRadius - s.radius) * 0.2 * timeScale;
@@ -290,12 +356,18 @@ export class VFXPool {
       s.alpha = s.life / s.maxL;
     }
 
-    for (let i = 0, len = this.lzs.length; i < len; i++) {
-      const z = this.lzs[i];
-      if (!z.active) continue;
+    const aLzs = this.activeLzs;
+    for (let i = aLzs.length - 1; i >= 0; i--) {
+      const z = aLzs[i];
       z.life -= timeScale;
       if (z.life <= 0) {
         z.active = z.visible = false;
+        const last = aLzs.pop()!;
+        if (last !== z) {
+          aLzs[i] = last;
+          last.activeIdx = i;
+        }
+        z.activeIdx = -1;
         continue;
       }
       z.clear().lineStyle(z.w, z.color, z.life / z.maxL);
@@ -315,12 +387,18 @@ export class VFXPool {
       }
     }
 
-    for (let i = 0, len = this.txts.length; i < len; i++) {
-      const t = this.txts[i];
-      if (!t.active) continue;
+    const aTxts = this.activeTxts;
+    for (let i = aTxts.length - 1; i >= 0; i--) {
+      const t = aTxts[i];
       t.life -= timeScale;
       if (t.life <= 0) {
         t.active = t.visible = false;
+        const last = aTxts.pop()!;
+        if (last !== t) {
+          aTxts[i] = last;
+          last.activeIdx = i;
+        }
+        t.activeIdx = -1;
         continue;
       }
       t.vy += 0.32 * timeScale;

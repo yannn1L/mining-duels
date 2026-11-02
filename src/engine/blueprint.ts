@@ -51,8 +51,8 @@ export function toPayload(
   return {
     ...base,
     ...overrides,
-    traits: overrides.traits ? [...overrides.traits] : [...(base.traits || [])],
-    p: { ...(base.p || {}), ...(overrides.p || {}) }
+    traits: overrides.traits || base.traits || [],
+    p: overrides.p ? { ...(base.p || {}), ...overrides.p } : base.p || {}
   };
 }
 
@@ -145,10 +145,8 @@ export class EntityBlueprint implements IEntityBlueprint {
     return {
       ...this.data,
       ...overrides,
-      traits: overrides.traits
-        ? [...overrides.traits]
-        : [...this.data.traits],
-      p: { ...(this.data.p || {}), ...(overrides.p || {}) }
+      traits: overrides.traits || this.data.traits,
+      p: overrides.p ? { ...(this.data.p || {}), ...overrides.p } : this.data.p || {}
     };
   }
 }

@@ -30,6 +30,9 @@ interface ViewportBlock {
 
 interface ToastItem {
   text: PIXI.Text;
+  active: boolean;
+  lastText: string;
+  lastColor: number;
   fx: number;
   fy: number;
   life: number;
@@ -43,6 +46,8 @@ interface ToastItem {
  * so zero GPU/Sprite allocations occur while keeping full API compatibility.
  */
 const HEADLESS_FX_POOL = {
+  lod: 0,
+  activeCount: 0,
   spawnPhysics() {},
   spawnShockwave() {},
   spawnLaser() {},
@@ -57,6 +62,8 @@ export class Arena extends PIXI.Container implements IArena {
   public halfTs: number;
   public maxDepth: number;
   public vfxLod: number;
+  private baseVfxLod: number;
+  private smoothDt = 1.0;
   public headless: boolean;
 
   public camY = 0;
@@ -88,12 +95,18 @@ export class Arena extends PIXI.Container implements IArena {
   private textCooldowns: Int32Array;
   private vpBlocks: ViewportBlock[] = [];
   private readonly RENDER_ROWS: number;
+  private lastCYInt = -1;
+  private hasDirtyBlocks = true;
+  private _debugWasDirty = false;
 
   private ents: Entity[] = [];
   private activeEnts = new SparseSet<Entity>();
   private entIdx = 0;
   private _deadScratch: Entity[] = [];
-  private toasts: ToastItem[] = [];
+  private toastPool: ToastItem[] = [];
+  private toastIdx = 0;
+  private lastToastTick = -10;
+  private lastToastKey = '';
 
   constructor(minitIdOrIds: string | string[], totalArenas = 2, headless = false) {
     super();
@@ -105,7 +118,8 @@ export class Arena extends PIXI.Container implements IArena {
     this.halfTs = CFG.GRID.HALF_TS;
     this.maxDepth = CFG.GRID.MAX_DEPTH;
     this.RENDER_ROWS = this.rows + 3;
-    this.vfxLod = headless ? 0 : CFG.SIM.VFX_LOD[totalArenas] || 1.0;
+    this.baseVfxLod = headless ? 0 : CFG.SIM.VFX_LOD[totalArenas] || 1.0;
+    this.vfxLod = this.baseVfxLod;
 
     const W = this.cols * this.ts;
     const H = this.rows * this.ts;
@@ -333,7 +347,7 @@ export class Arena extends PIXI.Container implements IArena {
       e.maxL = props.maxL ?? e.l;
       e.f = props.f ?? 0;
       e.ang = props.ang ?? 0;
-      e.traits = props.traits ? [...props.traits] : [];
+      e.traits = props.traits || [];
       e.p = props.p || {};
       e.state = {};
       e.counter = 0;
@@ -350,7 +364,10 @@ export class Arena extends PIXI.Container implements IArena {
     const rY = y - cYInt;
     if (rY < 0 || rY >= this.RENDER_ROWS) return;
     const vpb = this.vpBlocks[rY * this.cols + x];
-    if (vpb) vpb.dirty = true;
+    if (vpb) {
+      vpb.dirty = true;
+      this.hasDirtyBlocks = true;
+    }
   }
 
   public dmg(
@@ -457,41 +474,77 @@ export class Arena extends PIXI.Container implements IArena {
 
   public spawnToast(pX: number, pY: number, text: string, color: number): void {
     if (this.headless) return;
-    const t = new PIXI.Text(text, {
-      fontFamily: '"Orbitron", sans-serif',
-      fontWeight: '800',
-      fontSize: 9,
-      fill: numToHex(color),
-      stroke: '#000000',
-      strokeThickness: 3,
-      padding: 2
-    });
-    t.resolution = Math.max(2, Math.ceil(window.devicePixelRatio || 2) * 2);
-    t.texture.baseTexture.scaleMode = PIXI.SCALE_MODES.NEAREST;
-    t.anchor.set(0.5);
-    t.x = Math.round(pX);
-    t.y = Math.round(pY);
-    t.alpha = 1;
-    this.toastLayer.addChild(t);
-    this.toasts.push({
-      text: t,
-      fx: pX,
-      fy: pY,
-      life: 42,
-      maxLife: 42,
-      vy: -1.0,
-      vx: FastMath.randRange(-0.3, 0.3)
-    });
+    // Deduplicate identical toasts fired within 4 simulation ticks
+    if (this.simTicks - this.lastToastTick < 4 && this.lastToastKey === text) {
+      return;
+    }
+    this.lastToastTick = this.simTicks;
+    this.lastToastKey = text;
+
+    const MAX_TOASTS = 10;
+    let item: ToastItem;
+
+    if (this.toastPool.length < MAX_TOASTS) {
+      const t = new PIXI.Text(text, {
+        fontFamily: '"Orbitron", sans-serif',
+        fontWeight: '800',
+        fontSize: 9,
+        fill: numToHex(color),
+        stroke: '#000000',
+        strokeThickness: 3,
+        padding: 2
+      });
+      t.resolution = 2;
+      t.texture.baseTexture.scaleMode = PIXI.SCALE_MODES.NEAREST;
+      t.anchor.set(0.5);
+      this.toastLayer.addChild(t);
+      item = {
+        text: t,
+        active: true,
+        lastText: text,
+        lastColor: color,
+        fx: pX,
+        fy: pY,
+        life: 42,
+        maxLife: 42,
+        vy: -1.0,
+        vx: FastMath.randRange(-0.3, 0.3)
+      };
+      this.toastPool.push(item);
+    } else {
+      this.toastIdx = (this.toastIdx + 1) % MAX_TOASTS;
+      item = this.toastPool[this.toastIdx];
+      if (item.lastColor !== color) {
+        item.text.style.fill = numToHex(color);
+        item.lastColor = color;
+      }
+      if (item.lastText !== text) {
+        item.text.text = text;
+        item.lastText = text;
+      }
+      item.active = true;
+      item.fx = pX;
+      item.fy = pY;
+      item.life = 42;
+      item.maxLife = 42;
+      item.vy = -1.0;
+      item.vx = FastMath.randRange(-0.3, 0.3);
+    }
+
+    item.text.visible = true;
+    item.text.x = Math.round(pX);
+    item.text.y = Math.round(pY);
+    item.text.alpha = 1;
   }
 
   private _tickToasts(timeScale: number): void {
-    for (let i = this.toasts.length - 1; i >= 0; i--) {
-      const t = this.toasts[i];
+    for (let i = 0, len = this.toastPool.length; i < len; i++) {
+      const t = this.toastPool[i];
+      if (!t.active) continue;
       t.life -= timeScale;
       if (t.life <= 0) {
-        if (t.text.parent) t.text.parent.removeChild(t.text);
-        t.text.destroy();
-        this.toasts.splice(i, 1);
+        t.active = false;
+        t.text.visible = false;
         continue;
       }
       t.fy += t.vy * timeScale;
@@ -557,8 +610,15 @@ export class Arena extends PIXI.Container implements IArena {
   public renderDebug(debugCfg: DebugConfig): void {
     if (this.headless) return;
     const g = this.debugLayer;
+    if (!debugCfg.enabled) {
+      if (this._debugWasDirty) {
+        g.clear();
+        this._debugWasDirty = false;
+      }
+      return;
+    }
+    this._debugWasDirty = true;
     g.clear();
-    if (!debugCfg.enabled) return;
 
     const TS = this.ts;
     const HALF_TS = this.halfTs;
@@ -745,6 +805,17 @@ export class Arena extends PIXI.Container implements IArena {
 
   public updateVisuals(timeScale: number): void {
     if (this.headless) return;
+
+    // Adaptive VFX LOD Throttling based on rolling frame time and active particle saturation
+    this.smoothDt = this.smoothDt * 0.9 + timeScale * 0.1;
+    const pRatio = this.fxPool.activeCount / CFG.VFX.PHYSICS_LIMIT;
+    const dtFactor =
+      this.smoothDt > 1.16 ? Math.max(0.25, 1.0 - (this.smoothDt - 1.12) * 0.85) : 1.0;
+    const poolFactor =
+      pRatio > 0.5 ? Math.max(0.25, 1.0 - (pRatio - 0.5) * 1.4) : 1.0;
+    this.vfxLod = this.baseVfxLod * Math.min(dtFactor, poolFactor);
+    this.fxPool.lod = this.vfxLod;
+
     for (const slot of this.slots) {
       slot.updateVisuals(timeScale);
     }
@@ -766,46 +837,51 @@ export class Arena extends PIXI.Container implements IArena {
     this.worldContainer.y = Math.round(rawWorldY * snapFactor) / snapFactor;
 
     const cYInt = Math.max(0, Math.floor(this.camY));
-    const COLS = this.cols;
-    const N = this.RENDER_ROWS;
-    const TS = this.ts;
 
-    for (let vy = 0; vy < N; vy++) {
-      const gy = cYInt + vy;
-      const worldYPos = gy * TS;
-      const maxHp = CFG.ARENA.BASE_HP + gy * CFG.ARENA.HP_SCALING;
-      const rockIdx = Math.min(4, (gy / 20) | 0);
-      const texRock = AssetBaker.ROCK_TEXTURES[rockIdx];
+    // Only traverse viewport blocks when camera crosses a row boundary or blocks took damage
+    if (cYInt !== this.lastCYInt || this.hasDirtyBlocks) {
+      this.lastCYInt = cYInt;
+      this.hasDirtyBlocks = false;
 
-      for (let vx = 0; vx < COLS; vx++) {
-        const vpb = this.vpBlocks[vy * COLS + vx];
+      const COLS = this.cols;
+      const N = this.RENDER_ROWS;
+      const TS = this.ts;
 
-        if (vpb.lastGy !== gy) {
-          vpb.lastGy = gy;
-          vpb.dirty = true;
-        }
+      for (let vy = 0; vy < N; vy++) {
+        const gy = cYInt + vy;
+        const worldYPos = gy * TS;
+        const maxHp = CFG.ARENA.BASE_HP + gy * CFG.ARENA.HP_SCALING;
+        const rockIdx = Math.min(4, (gy / 20) | 0);
+        const texRock = AssetBaker.ROCK_TEXTURES[rockIdx];
 
-        vpb.c.x = vx * TS;
-        vpb.c.y = worldYPos;
+        for (let vx = 0; vx < COLS; vx++) {
+          const vpb = this.vpBlocks[vy * COLS + vx];
 
-        if (vpb.dirty) {
-          vpb.dirty = false;
-          const hp = this.getHP(vx, gy);
-          if (hp <= 0 || hp === 9999) {
-            vpb.c.visible = false;
-          } else {
-            vpb.c.visible = true;
-            vpb.b.texture = texRock;
-            vpb.b.alpha = 1.0;
-            const pct = hp / maxHp;
-            if (pct > 0.9) {
-              vpb.cr.visible = false;
+          if (vpb.lastGy !== gy) {
+            vpb.lastGy = gy;
+            vpb.c.y = worldYPos;
+            vpb.dirty = true;
+          }
+
+          if (vpb.dirty) {
+            vpb.dirty = false;
+            const hp = this.getHP(vx, gy);
+            if (hp <= 0 || hp === 9999) {
+              vpb.c.visible = false;
             } else {
-              vpb.cr.visible = true;
-              if (pct > 0.75) vpb.cr.texture = Textures['crack_1'];
-              else if (pct > 0.5) vpb.cr.texture = Textures['crack_2'];
-              else if (pct > 0.25) vpb.cr.texture = Textures['crack_3'];
-              else vpb.cr.texture = Textures['crack_4'];
+              vpb.c.visible = true;
+              vpb.b.texture = texRock;
+              vpb.b.alpha = 1.0;
+              const pct = hp / maxHp;
+              if (pct > 0.9) {
+                vpb.cr.visible = false;
+              } else {
+                vpb.cr.visible = true;
+                if (pct > 0.75) vpb.cr.texture = Textures['crack_1'];
+                else if (pct > 0.5) vpb.cr.texture = Textures['crack_2'];
+                else if (pct > 0.25) vpb.cr.texture = Textures['crack_3'];
+                else vpb.cr.texture = Textures['crack_4'];
+              }
             }
           }
         }
@@ -818,7 +894,7 @@ export class Arena extends PIXI.Container implements IArena {
     if (this.flashAlpha > 0) {
       this.screenFlash.alpha = this.flashAlpha;
       this.flashAlpha = Math.max(0, this.flashAlpha - 0.05 * timeScale);
-    } else {
+    } else if (this.screenFlash.alpha !== 0) {
       this.screenFlash.alpha = 0;
     }
 
@@ -828,7 +904,7 @@ export class Arena extends PIXI.Container implements IArena {
       this.view.position.set(sx, sy);
       this.shake *= Math.pow(0.82, timeScale);
       if (this.shake < 0.5) this.shake = 0;
-    } else {
+    } else if (this.view.position.x !== 0 || this.view.position.y !== 0) {
       this.view.position.set(0, 0);
     }
   }
@@ -845,9 +921,10 @@ export class Arena extends PIXI.Container implements IArena {
         console.warn('[Arena] slot destroy error:', e);
       }
     }
-    for (const t of this.toasts) {
+    for (const t of this.toastPool) {
       if (t.text && !t.text.destroyed) t.text.destroy();
     }
+    this.toastPool.length = 0;
     super.destroy(options);
   }
 }

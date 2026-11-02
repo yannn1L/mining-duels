@@ -246,13 +246,19 @@ export class MinitSlot implements IMinitSlot {
     }
 
     for (const eff of this.effects) {
-      const icon = eff._uiIcon;
+      const icon = eff._uiIcon as
+        | (PIXI.Graphics & { _lastBarW?: number; _lastColor?: number })
+        | undefined;
       if (!icon) continue;
       const pct = Math.max(0, Math.min(1, eff.duration / eff.def.defaultDur));
+      const barW = Math.round(6 * pct);
+      if (icon._lastBarW === barW && icon._lastColor === eff.color) continue;
+      icon._lastBarW = barW;
+      icon._lastColor = eff.color;
       icon.clear();
       icon.beginFill(0x000000, 0.85).drawRect(-4, -4, 8, 9).endFill();
       icon.beginFill(eff.color, 0.95).drawRect(-3, -3, 6, 5).endFill();
-      icon.beginFill(eff.color, 1).drawRect(-3, 3, Math.round(6 * pct), 1).endFill();
+      icon.beginFill(eff.color, 1).drawRect(-3, 3, barW, 1).endFill();
     }
   }
 

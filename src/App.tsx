@@ -169,7 +169,10 @@ export default function App() {
     tl: CFG.SIM.DUR,
     overtimeTarget: 0,
     slowmoTimer: 0,
-    pendingSteps: 0
+    pendingSteps: 0,
+    telemetryTick: 0,
+    lastTimeTenths: Math.ceil(CFG.SIM.DUR * 10),
+    lastOvertimeRem: CFG.SIM.OVERTIME_HITS
   });
 
   useEffect(() => {
@@ -241,32 +244,73 @@ export default function App() {
   }, []);
 
   const refreshTelemetrySnapshot = useCallback((arenas: Arena[], dbg: DebugConfig) => {
-    const nextTelemetry = arenas.map((a): PlayerTelemetry | null => {
-      const slot = a.slots[0];
-      if (!slot) return null;
-      const md = slot.md;
-      const sc = Math.floor(a.stats.d * CFG.SIM.MULT) + a.stats.maxDp;
-      const effectiveCd = Math.max(1, Math.floor(md.cd / slot.modifiers.speedMul));
-      return {
-        id: md.id,
-        name: md.name,
-        colorHex: numToHex(md.color),
-        score: sc,
-        depth: a.stats.maxDp,
-        mined: a.stats.d,
-        cdPct: Math.min(1, slot.log.t / effectiveCd),
-        effects: slot.effects.map((e) => ({
-          id: e.id,
-          label: e.label,
-          colorHex: numToHex(e.color),
-          stacks: e.stacks,
-          pct: Math.max(0, Math.min(1, e.duration / e.def.defaultDur))
-        })),
-        debug: dbg.enabled ? a.getDebugSnapshot() : undefined
-      };
-    }) as [PlayerTelemetry | null, PlayerTelemetry | null];
+    setTelemetry((prev) => {
+      if (!dbg.enabled && prev[0] && prev[1] && arenas.length === 2) {
+        let changed = false;
+        for (let i = 0; i < 2; i++) {
+          const a = arenas[i];
+          const slot = a.slots[0];
+          const p = prev[i];
+          if (!slot || !p) {
+            changed = true;
+            break;
+          }
+          const sc = Math.floor(a.stats.d * CFG.SIM.MULT) + a.stats.maxDp;
+          const effectiveCd = Math.max(1, Math.floor(slot.md.cd / slot.modifiers.speedMul));
+          const cdQuant = Math.round(Math.min(1, slot.log.t / effectiveCd) * 20);
+          const prevCdQuant = Math.round(p.cdPct * 20);
+          if (
+            p.id !== slot.md.id ||
+            p.score !== sc ||
+            p.depth !== a.stats.maxDp ||
+            p.mined !== a.stats.d ||
+            prevCdQuant !== cdQuant ||
+            p.effects.length !== slot.effects.length ||
+            p.debug !== undefined
+          ) {
+            changed = true;
+            break;
+          }
+          for (let j = 0; j < slot.effects.length; j++) {
+            const eff = slot.effects[j];
+            const pe = p.effects[j];
+            const pctQuant = Math.round((eff.duration / eff.def.defaultDur) * 10);
+            const prevPctQuant = Math.round(pe.pct * 10);
+            if (pe.id !== eff.id || pe.stacks !== eff.stacks || pctQuant !== prevPctQuant) {
+              changed = true;
+              break;
+            }
+          }
+          if (changed) break;
+        }
+        if (!changed) return prev;
+      }
 
-    setTelemetry(nextTelemetry);
+      return arenas.map((a): PlayerTelemetry | null => {
+        const slot = a.slots[0];
+        if (!slot) return null;
+        const md = slot.md;
+        const sc = Math.floor(a.stats.d * CFG.SIM.MULT) + a.stats.maxDp;
+        const effectiveCd = Math.max(1, Math.floor(md.cd / slot.modifiers.speedMul));
+        return {
+          id: md.id,
+          name: md.name,
+          colorHex: numToHex(md.color),
+          score: sc,
+          depth: a.stats.maxDp,
+          mined: a.stats.d,
+          cdPct: Math.min(1, slot.log.t / effectiveCd),
+          effects: slot.effects.map((e) => ({
+            id: e.id,
+            label: e.label,
+            colorHex: numToHex(e.color),
+            stacks: e.stacks,
+            pct: Math.max(0, Math.min(1, e.duration / e.def.defaultDur))
+          })),
+          debug: dbg.enabled ? a.getDebugSnapshot() : undefined
+        };
+      }) as [PlayerTelemetry | null, PlayerTelemetry | null];
+    });
   }, []);
 
   // Boot PixiJS Engine, Bake Procedural Assets, and Load Saved Custom .ts Minits
@@ -290,6 +334,7 @@ export default function App() {
     appRef.current = app;
 
     const bgContainer = new PIXI.Container();
+    const floatersContainer = new PIXI.Container();
     const duelContainer = new PIXI.Container();
     app.stage.addChild(bgContainer, duelContainer);
     duelContainerRef.current = duelContainer;
@@ -300,7 +345,7 @@ export default function App() {
       window.innerHeight
     );
     globalBg.alpha = 0.55;
-    bgContainer.addChild(globalBg);
+    bgContainer.addChild(globalBg, floatersContainer);
 
     const floaters: BgFloater[] = [];
 
@@ -350,7 +395,7 @@ export default function App() {
         f.vy = FastMath.randRange(-0.6, 0.6);
         f.alpha = FastMath.randRange(0.12, 0.32);
         f.tint = 0x00aaff;
-        bgContainer.addChild(f);
+        floatersContainer.addChild(f);
         floaters.push(f);
       }
 
@@ -358,19 +403,27 @@ export default function App() {
         const rawDt = Math.min(dl, CFG.SIM.MAX_DT);
         const dt = rawDt > 0.88 && rawDt < 1.12 ? 1.0 : rawDt;
 
-        // Animate background floaters
-        for (const f of floaters) {
-          f.x += f.vx * dt;
-          f.y += f.vy * dt;
-          f.rotation += f.vx * 0.015 * dt;
-          if (f.x < -80) f.x = window.innerWidth + 80;
-          else if (f.x > window.innerWidth + 80) f.x = -80;
-          if (f.y < -80) f.y = window.innerHeight + 80;
-          else if (f.y > window.innerHeight + 80) f.y = -80;
+        const st = simStateRef.current;
+        const inSim = st.screen === 'SIMULATION';
+
+        // Pause & hide background floaters during active duel simulations to eliminate background overdraw
+        if (floatersContainer.visible === inSim) {
+          floatersContainer.visible = !inSim;
+        }
+        if (!inSim) {
+          for (const f of floaters) {
+            f.x += f.vx * dt;
+            f.y += f.vy * dt;
+            f.rotation += f.vx * 0.015 * dt;
+            if (f.x < -80) f.x = window.innerWidth + 80;
+            else if (f.x > window.innerWidth + 80) f.x = -80;
+            if (f.y < -80) f.y = window.innerHeight + 80;
+            else if (f.y > window.innerHeight + 80) f.y = -80;
+          }
+          return;
         }
 
-        const st = simStateRef.current;
-        if (st.screen !== 'SIMULATION' || st.phase === 'FINISHED') {
+        if (st.phase === 'FINISHED') {
           return;
         }
 
@@ -382,7 +435,8 @@ export default function App() {
 
         // Handle Debug Pause & Step-by-Step Frame Controls
         if (dbg.enabled && dbg.paused) {
-          if (st.pendingSteps > 0) {
+          const hadSteps = st.pendingSteps > 0;
+          if (hadSteps) {
             const stepsToRun = st.pendingSteps;
             st.pendingSteps = 0;
             for (let s = 0; s < stepsToRun; s++) {
@@ -392,6 +446,8 @@ export default function App() {
                   st.phase = 'OVERTIME';
                   const tot = arenas[0].stats.d + arenas[1].stats.d;
                   st.overtimeTarget = tot + CFG.SIM.OVERTIME_HITS;
+                  st.lastTimeTenths = 0;
+                  st.lastOvertimeRem = CFG.SIM.OVERTIME_HITS;
                   setTimeLeft(0);
                   setOvertimeRemaining(CFG.SIM.OVERTIME_HITS);
                   setDuelPhase('OVERTIME');
@@ -415,7 +471,9 @@ export default function App() {
             a.updateVisuals(dt);
             a.renderDebug(dbg);
           });
-          refreshTelemetrySnapshot(arenas, dbg);
+          if (hadSteps) {
+            refreshTelemetrySnapshot(arenas, dbg);
+          }
           return;
         }
 
@@ -426,6 +484,7 @@ export default function App() {
           st.slowmoTimer -= dt * speedMul;
           if (st.slowmoTimer <= 0) {
             st.phase = 'FINISHED';
+            refreshTelemetrySnapshot(arenas, dbg);
             setDuelPhase('FINISHED');
             AudioSys.play('win');
             return;
@@ -437,16 +496,25 @@ export default function App() {
             st.phase = 'OVERTIME';
             const tot = arenas[0].stats.d + arenas[1].stats.d;
             st.overtimeTarget = tot + CFG.SIM.OVERTIME_HITS;
+            st.lastTimeTenths = 0;
+            st.lastOvertimeRem = CFG.SIM.OVERTIME_HITS;
             setTimeLeft(0);
             setOvertimeRemaining(CFG.SIM.OVERTIME_HITS);
             setDuelPhase('OVERTIME');
           } else {
-            setTimeLeft(st.tl);
+            const tenths = Math.ceil(st.tl * 10);
+            if (tenths !== st.lastTimeTenths) {
+              st.lastTimeTenths = tenths;
+              setTimeLeft(st.tl);
+            }
           }
         } else if (st.phase === 'OVERTIME') {
           const tot = arenas[0].stats.d + arenas[1].stats.d;
           const rem = Math.max(0, st.overtimeTarget - tot);
-          setOvertimeRemaining(rem);
+          if (rem !== st.lastOvertimeRem) {
+            st.lastOvertimeRem = rem;
+            setOvertimeRemaining(rem);
+          }
           if (tot >= st.overtimeTarget) {
             st.phase = 'SLOWMO';
             st.slowmoTimer = CFG.SIM.SLOWMO_DUR;
@@ -459,7 +527,10 @@ export default function App() {
           a.renderDebug(dbg);
         });
 
-        refreshTelemetrySnapshot(arenas, dbg);
+        st.telemetryTick = (st.telemetryTick + 1) % 5;
+        if (st.telemetryTick === 0) {
+          refreshTelemetrySnapshot(arenas, dbg);
+        }
       });
 
       setBooted(true);
@@ -511,7 +582,11 @@ export default function App() {
       simStateRef.current.overtimeTarget = 0;
       simStateRef.current.slowmoTimer = 0;
       simStateRef.current.pendingSteps = 0;
+      simStateRef.current.telemetryTick = 0;
+      simStateRef.current.lastTimeTenths = Math.ceil(CFG.SIM.DUR * 10);
+      simStateRef.current.lastOvertimeRem = CFG.SIM.OVERTIME_HITS;
 
+      refreshTelemetrySnapshot([a1, a2], debugConfigRef.current);
       setDuelPhase('ACTIVE');
       setTimeLeft(CFG.SIM.DUR);
       setOvertimeRemaining(CFG.SIM.OVERTIME_HITS);
@@ -520,7 +595,7 @@ export default function App() {
       setTimeout(() => syncArenaLayout(), 0);
       setTimeout(() => syncArenaLayout(), 60);
     },
-    [destroyArenas, syncArenaLayout]
+    [destroyArenas, syncArenaLayout, refreshTelemetrySnapshot]
   );
 
   useEffect(() => {
