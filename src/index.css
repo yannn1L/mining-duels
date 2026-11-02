@@ -1,0 +1,45 @@
+@import "tailwindcss";
+
+@layer base {
+  body,
+  button,
+  input,
+  select,
+  textarea {
+    font-family: 'Orbitron', system-ui, -apple-system, sans-serif;
+    background-color: #050508;
+    color: #f8fafc;
+  }
+}
+
+.font-pixel {
+  font-family: 'Orbitron', sans-serif;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+
+.font-mono-tabular {
+  font-family: 'Orbitron', sans-serif;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.pixelated-canvas {
+  image-rendering: -moz-crisp-edges;
+  image-rendering: -webkit-crisp-edges;
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}
+
+/* Crisp retro scanline overlay that never blurs text or textures */
+.crt-scanlines {
+  background: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0),
+    rgba(255, 255, 255, 0) 50%,
+    rgba(0, 0, 0, 0.28) 50%,
+    rgba(0, 0, 0, 0.28)
+  );
+  background-size: 100% 4px;
+}

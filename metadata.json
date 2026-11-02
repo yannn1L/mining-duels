@@ -1,0 +1,6 @@
+{
+  "name": "Mining Duels!",
+  "description": "Competitive 2-player automated mining arena duel game with pixel-perfect rendering and real-time combat abilities.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

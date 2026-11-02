@@ -1,0 +1,6 @@
+{
+  "summary":  "Architectural plan for the Developer Lab modal in the Editor scene, featuring .ts/.js external Minit importing/exporting with localStorage persistence and dynamic runtime baking, a Headless Balancing Check simulator (Round-Robin Matrix + 1v1 batch runs with detailed telemetry reports), and a live Arena Debugging Mode (hitbox/vector outlines, entity inspector, and frame-by-frame step controls).",
+  "updatedAt":  "2026-11-02T09:31:05.541743098Z",
+  "requestFeedback":  true,
+  "userFacing":  true
+}
