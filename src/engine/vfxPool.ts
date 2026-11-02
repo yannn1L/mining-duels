@@ -1,6 +1,6 @@
 import * as PIXI from 'pixi.js';
 import { CFG } from '../data/config';
-import { FastMath } from './fastMath';
+import { DragLUT, FastMath } from './fastMath';
 import { Textures } from './textures';
 
 interface PhysicsParticle extends PIXI.Sprite {
@@ -301,8 +301,8 @@ export class VFXPool {
   public update(timeScale = 1.0): void {
     if (this.destroyed || !this.c || this.c.destroyed) return;
     const unitScale = Math.abs(timeScale - 1.0) < 0.04;
-    const pDragX = unitScale ? CFG.PHYSICS.DRAG_X : Math.pow(CFG.PHYSICS.DRAG_X, timeScale);
-    const pDragY = unitScale ? CFG.PHYSICS.DRAG_Y : Math.pow(CFG.PHYSICS.DRAG_Y, timeScale);
+    const pDragX = unitScale ? CFG.PHYSICS.DRAG_X : DragLUT.getDragX(timeScale);
+    const pDragY = unitScale ? CFG.PHYSICS.DRAG_Y : DragLUT.getDragY(timeScale);
 
     const aPhys = this.activePhys;
     for (let i = aPhys.length - 1; i >= 0; i--) {
@@ -326,8 +326,8 @@ export class VFXPool {
         s.y += s.vy;
         s.rotation += s.vx * 0.1;
       } else {
-        s.vx *= s.dragX === CFG.PHYSICS.DRAG_X ? pDragX : Math.pow(s.dragX, timeScale);
-        s.vy *= s.dragY === CFG.PHYSICS.DRAG_Y ? pDragY : Math.pow(s.dragY, timeScale);
+        s.vx *= s.dragX === CFG.PHYSICS.DRAG_X ? pDragX : DragLUT.getDragX(timeScale);
+        s.vy *= s.dragY === CFG.PHYSICS.DRAG_Y ? pDragY : DragLUT.getDragY(timeScale);
         s.x += s.vx * timeScale;
         s.y += s.vy * timeScale;
         s.rotation += s.vx * 0.1 * timeScale;

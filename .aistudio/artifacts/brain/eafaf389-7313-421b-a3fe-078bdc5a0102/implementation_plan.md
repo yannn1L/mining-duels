@@ -1,89 +1,82 @@
-# Mining Duels — Full Engine & Rendering Performance Optimization Plan
+# Mobile Performance & WebGL Batching Optimization Plan
 
-A comprehensive runtime and rendering optimization plan to eliminate frame rate drops during high-intensity duels, decouple React DOM telemetry updates from the 60 FPS WebGL simulation loop, and introduce dynamic particle throttling.
+Deliver a locked 60 FPS gameplay experience on mobile and tablet devices during intense dual-arena combat without sacrificing visual effects, particle counts, or any gameplay features.
 
 ## User Review & Critical Decisions
 
-Based on your preferences, this plan incorporates the following core decisions:
-- **Primary Optimization Target**: Active duel simulations with heavy particle and projectile activity across both arenas.
-- **Adaptive Visual Effects**: Dynamic VFX throttling that automatically scales back secondary particle bursts and trails when frame time spikes or active particle pools saturate, preserving full visual impact during normal load.
-- **Decoupled HUD & Telemetry Architecture**: The PixiJS arena simulation runs at an unblocked 60 FPS while React DOM telemetry, status effect bars, and timer HUD updates are throttled and only triggered when displayed values change.
+Based on your clarification responses, this optimization plan incorporates the following architectural decisions:
+- **Target Hardware Focus**: Mobile and tablet devices with thermal and memory bandwidth constraints.
+- **Core Pipeline Upgrades**: WebGL particle batching and layout reflow caching to completely eliminate DOM layout thrashing.
+- **VFX & Physics Architecture**: Retain 100% of particle counts and visual fidelity using GPU-accelerated particle batching combined with precomputed physics lookup tables.
 
 ---
 
 ## 1. Overview & Core Concept
 
-During intense matchups (such as Laser, Alchemist, Frenzy, or Turret duels), **Mining Duels** experiences frame rate drops caused by five compounding bottlenecks:
-1. **60Hz React State Re-renders**: `App.tsx` calls `setTimeLeft` and `setTelemetry` (allocating new arrays and objects) on every single PixiJS ticker frame (60 times per second), forcing React to reconcile the entire DOM HUD tree every 16.6ms alongside WebGL rendering.
-2. **Unconditional Scene-Graph Transform Invalidations**: Every frame, `Arena.updateVisuals` writes `.x` and `.y` on all 690 viewport block containers (`345` per arena) even when the camera row hasn't changed and no blocks were damaged—forcing PixiJS to recompute 2,070 world matrices per frame.
-3. **Full-Pool Particle Scans & Per-Particle `Math.pow`**: `VFXPool.update` scans all 800 physics slots per arena (1,600 total) every frame regardless of how many particles are active, and runs `Math.pow(dragX, timeScale)` per particle inside the hot loop.
-4. **Mid-Combat Canvas Text Allocations & 60Hz Graphics Re-triangulation**: Status effect toasts (`spawnToast`) instantiate a brand-new high-DPI `PIXI.Text` (`resolution = 4`) on every status application, triggering synchronous HTML5 Canvas text rasterization and GPU texture uploads mid-duel. Meanwhile, `MinitSlot._updateEffectsUI` calls `PIXI.Graphics.clear()` and redraws status progress bars 60 times per second.
-5. **Hidden Background Overdraw**: The 22 animated floating background sprites remain visible and continue updating behind the opaque duel arenas during active simulations.
+Mining Duels currently experiences frame rate dips to 30–50 FPS on mobile and tablet devices due to two main bottlenecks:
+1. **Forced Synchronous Layout Thrashing**: Querying `getBoundingClientRect()` inside the 60 FPS PixiJS animation loop forces the mobile browser's layout engine to recalculate full-page CSS layout synchronously on every animation frame (costing 8–15ms per frame on mobile CPUs).
+2. **WebGL Draw Call & Transform Churn**: 800+ particle sprites per arena living inside standard `PIXI.Container` trees generate multiple draw calls and matrix recomputations, while mobile screens with high Device Pixel Ratios (2.75x–3.5x) stress the mobile GPU fill-rate.
+
+This plan addresses both root causes directly—maintaining all VFX, particle densities, lasers, and animations at a solid 60 FPS.
 
 ---
 
 ## 2. User Experience & Visual Design
 
-- **Locked 60 FPS Combat Fluidity**: Camera tracking, hit-stop, screen shake, laser beams, and projectile physics remain silky-smooth even when both Minits trigger rapid-fire abilities simultaneously.
-- **Seamless Dynamic Particle Scaling**:
-  - Under normal frame budgets (`>= 55 FPS`), particles spawn at 100% density.
-  - When frame delta spikes or active physics particles exceed pool thresholds, an adaptive LOD multiplier (`vfxLod`) smoothly scales down burst counts and skips redundant ambient dust/trail particles while always preserving critical combat telegraphs (lasers, shockwaves, explosions, and damage popups).
-- **Responsive Yet Lightweight HUD**:
-  - Match countdown timer updates cleanly when tenths-of-a-second change.
-  - Player telemetry (score, depth, mined count, and status effects) updates at a crisp, human-readable 12–15Hz cadence without stalling WebGL frame submission.
+- **Silky 60 FPS on Mobile**: Excavation, screen shake, status toasts, and rapid projectile bursts run fluidly on iOS and Android devices without stutter or thermal throttling.
+- **Identical Visual Fidelity**: All sparks, dust bursts, laser beams, shockwaves, damage digits, and custom minit effects remain active with zero reduction in particle count.
+- **Pixel-Crisp Scaling**: Clamping DPR to 2.0x on ultra-high-density mobile screens preserves pixel-art clarity while drastically reducing mobile GPU fill-rate strain.
 
 ---
 
 ## 3. Key Product Decisions & Trade-Offs
 
-- **Active-Index Tracking vs. Fixed Array Scanning in `VFXPool`**:
-  - *Decision*: Maintain compact active-item arrays (swap-and-pop on particle expiration) for physics particles, shockwaves, lasers, and popups, plus a fast-path drag calculation when `timeScale ≈ 1.0`.
-  - *Trade-off*: Adds a few bytes of index bookkeeping per pool item in exchange for reducing idle/moderate particle loop overhead by up to 85%.
-- **Dirty-Flagged Viewport Block Updates**:
-  - *Decision*: Introduce a `hasDirtyBlocks` flag and compare `cYInt !== lastCYInt` before iterating the 345 viewport grid slots per arena, and only update `vpb.c.y` when a slot's grid row (`gy`) actually changes.
-  - *Trade-off*: Eliminates hundreds of redundant PixiJS transform recalculations on frames where the camera is stationary and no blocks took damage.
-- **Pre-Allocated Toast & Status Bar Pooling**:
-  - *Decision*: Replace per-proc `new PIXI.Text()` allocations in `spawnToast` with a fixed, reusable toast pool per arena (with rate-limiting against duplicate rapid-fire procs), and replace 60Hz `PIXI.Graphics.clear()` status bar redraws with quantized dirty checks so geometry only updates when the bar width or color visibly changes.
+- **Cached Layout Reflow vs. Per-Frame DOM Queries**:
+  - *Chosen Approach*: Cache arena bounding box coordinates and update them only upon window resize, orientation change, or when a Mutation/ResizeObserver triggers, completely removing `getBoundingClientRect()` from the hot ticker loop.
+  - *Why*: Eliminates forced synchronous layout thrashing on mobile WebKit/Blink, regaining 10+ ms of CPU frame budget every tick.
+- **PIXI.ParticleContainer & Batched Sprites**:
+  - *Chosen Approach*: Transition the physics particle pool to `PIXI.ParticleContainer` with batched vertex buffer updates.
+  - *Why*: Reduces hundreds of individual WebGL draw calls and transform matrix passes to 1 single GPU draw call per arena.
+- **Precomputed Physics Lookup Tables**:
+  - *Chosen Approach*: Precompute drag decay curves (`dragX^t`, `dragY^t`) and trigonometric tables in static typed arrays, replacing repeated dynamic calculations in hot loops.
+  - *Why*: Frees mobile CPU cycles for game simulation and PixiJS rendering.
 
 ---
 
 ## 4. Technical Architecture & Data Strategy
 
 ```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                        PixiJS 60 FPS Ticker Loop                        │
-└───────────────────┬─────────────────────────────────┬───────────────────┘
-                    │ Every Frame (16.6ms)            │ Throttled (~12-15Hz / Dirty)
-                    ▼                                 ▼
-┌───────────────────────────────────────┐ ┌───────────────────────────────┐
-│        WebGL Simulation Engine        │ │     React HUD & Telemetry     │
-│                                       │ │                               │
-│ • Adaptive Frame-Time Monitor (LOD)   │ │ • Decoupled Telemetry Sync    │
-│ • Dirty-Flagged Viewport Grid (690x)  │ │ • Quantized Timer State       │
-│ • Swap-&-Pop Active VFX Pool          │ │ • Paused BG Floaters in Sim   │
-│ • Pooled Status Toasts & Cached Bars  │ │ • On-Demand Debug Inspector   │
-└───────────────────────────────────────┘ └───────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────┐
+│                        PixiJS 60 FPS Ticker Loop                       │
+└───────────────────┬────────────────────────────────┬───────────────────┘
+                    │                                │
+                    ▼                                ▼
+┌───────────────────────────────────────┐ ┌──────────────────────────────┐
+│       WebGL Multi-Arena Engine        │ │     Layout & Telemetry Sync    │
+│                                       │ │                              │
+│ • Batched PIXI.ParticleContainer (1x) │ │ • Cached DOM Anchor Bounds   │
+│ • Precomputed Physics LUT (Float32)   │ │   (ResizeObserver-driven)    │
+│ • Viewport Block Dirty Tile Pass      │ │ • Zero getBoundingClientRect │
+│ • Clamped Mobile DPR (Max 2.0x)       │ │   in per-frame ticker        │
+└───────────────────────────────────────┘ └──────────────────────────────┘
 ```
 
-### Core Optimization Pillars
+### Key Technical Steps
 
-1. **Decoupled React HUD & Background Culling**
-   - Throttle `refreshTelemetrySnapshot` in the ticker loop to run every 5 frames (~12Hz) and perform a shallow change check before calling `setTelemetry` so React never re-renders when stats are unchanged.
-   - Quantize `timeLeft` and `overtimeRemaining` state updates to 0.1s increments (`Math.round(tl * 10) / 10`) so `setTimeLeft` only fires ~10 times per second instead of 60.
-   - Hide `bgContainer` (`bgContainer.visible = false`) and skip updating the 22 background floaters whenever the active screen is `SIMULATION`.
+1. **Eliminate Layout Thrashing (`App.tsx`)**:
+   - Cache `p1AnchorRef` and `p2AnchorRef` bounding coordinates in ref memory.
+   - Remove per-frame `getBoundingClientRect()` calls from the ticker.
+   - Update anchor coordinates exclusively inside `ResizeObserver` callbacks and window resize/orientation events.
 
-2. **Active-Only `VFXPool` & Dynamic Particle Throttling**
-   - Refactor `VFXPool` to iterate only over active particles via compact active lists using O(1) swap-and-pop removal when `life <= 0`.
-   - Add an adaptive frame-rate monitor in `Arena` that tracks rolling frame delta (`dt`) and current `VFXPool` occupancy to compute `vfxLod` (`0.2` to `1.0`).
-   - Scale multi-particle burst counts by `vfxLod` and probabilistically cull low-priority ambient dust/trail spawns when pool occupancy exceeds 65% or FPS dips below 50.
-   - Replace per-particle `Math.pow(s.dragX, timeScale)` with direct multiplication when `Math.abs(timeScale - 1) < 0.05`.
+2. **Batched Particle Rendering (`vfxPool.ts`)**:
+   - Refactor `VFXPool` to use `PIXI.ParticleContainer` configured for dynamic position, scale, rotation, and alpha batching.
+   - Maintain the active swap-and-pop particle list, directly updating typed vertex buffers.
+   - Retain full particle lifetimes and burst counts without culling.
 
-3. **Zero-Waste Viewport Grid & Entity Rendering**
-   - Add `hasDirtyBlocks` tracking in `Arena._markDirty()` and skip the 345-slot `vpBlocks` traversal altogether on frames where `!this.hasDirtyBlocks && cYInt === this.lastCYInt`.
-   - Remove redundant `vpb.c.x = vx * TS` writes inside `updateVisuals()` (already positioned at initialization) and only assign `vpb.c.y` when `vpb.lastGy !== gy`.
-   - Guard `debugLayer.clear()` with a `_debugWasEnabled` flag so it is not invoked 60 times per second when the debugger is off.
+3. **Precomputed Physics Lookup Tables (`fastMath.ts`)**:
+   - Create pre-baked Float32 lookup tables for drag multipliers and directional vectors.
+   - Replace dynamic `Math.pow` calculations with instant array index lookups.
 
-4. **Pooled Status Toasts & Cached Status Effect Icons**
-   - Pre-allocate a pool of reusable `PIXI.Text` toast objects per arena (`resolution = 2`) with a short cooldown per effect ID to eliminate mid-combat canvas creation and `destroy()` churn.
-   - Cache the last rendered fill color and quantized bar width on each status effect icon in `MinitSlot._updateEffectsUI()` so `PIXI.Graphics` is only redrawn when the visual bar step changes.
-   - Avoid cloning immutable default `traits` arrays in `toPayload()` when no trait overrides are supplied.
+4. **Mobile GPU Fill-Rate Optimization (`App.tsx`)**:
+   - Clamp canvas `resolution` to `Math.min(2.0, window.devicePixelRatio || 1)`.
+   - Prevent 3x/3.5x mobile screens from rendering excessive pixel fill that overwhelms mobile fragment shaders.

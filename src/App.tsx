@@ -134,6 +134,18 @@ export default function App() {
     debugConfigRef.current = debugConfig;
   }, [debugConfig]);
 
+  // Real-time FPS & frame-time state for Debug Mode
+  const [fpsInfo, setFpsInfo] = useState<{ fps: number; ms: number }>({ fps: 60, ms: 16.6 });
+  const fpsCalcRef = useRef<{
+    lastTime: number;
+    frames: number;
+    accumMs: number;
+  }>({
+    lastTime: typeof performance !== 'undefined' ? performance.now() : Date.now(),
+    frames: 0,
+    accumMs: 0
+  });
+
   // Simulation state
   const [duelPhase, setDuelPhase] = useState<DuelPhase>('ACTIVE');
   const [timeLeft, setTimeLeft] = useState<number>(CFG.SIM.DUR);
@@ -319,7 +331,9 @@ export default function App() {
     if (!canvas) return;
 
     let destroyed = false;
-    const dpr = Math.max(1, Math.ceil(window.devicePixelRatio || 1));
+    // Cap DPR to 2.0 max to prevent mobile 3x / 3.5x Retina displays from allocating 4K+ render targets
+    // and overwhelming mobile tile-based deferred renderers (TBDR GPUs)
+    const dpr = Math.min(2, Math.max(1, Math.ceil(window.devicePixelRatio || 1)));
 
     const app = new PIXI.Application({
       view: canvas,
@@ -359,8 +373,13 @@ export default function App() {
       syncArenaLayout();
     };
 
+    const handleScroll = () => {
+      syncArenaLayout();
+    };
+
     window.addEventListener('resize', handleResize);
     window.addEventListener('orientationchange', handleResize);
+    window.addEventListener('scroll', handleScroll, { passive: true });
 
     let resizeObserver: ResizeObserver | null = null;
     if (rootRef.current && typeof ResizeObserver !== 'undefined') {
@@ -402,6 +421,27 @@ export default function App() {
       app.ticker.add((dl) => {
         const rawDt = Math.min(dl, CFG.SIM.MAX_DT);
         const dt = rawDt > 0.88 && rawDt < 1.12 ? 1.0 : rawDt;
+
+        // Measure live FPS for Debug Mode
+        const now = typeof performance !== 'undefined' ? performance.now() : Date.now();
+        const calc = fpsCalcRef.current;
+        const deltaMs = now - calc.lastTime;
+        calc.lastTime = now;
+        calc.frames++;
+        calc.accumMs += deltaMs;
+
+        if (calc.accumMs >= 200) {
+          if (debugConfigRef.current.enabled) {
+            const avgMs = calc.accumMs / Math.max(1, calc.frames);
+            const measuredFps = Math.min(120, Math.round((1000 / Math.max(1, avgMs)) * 10) / 10);
+            setFpsInfo({
+              fps: measuredFps,
+              ms: Math.round(avgMs * 10) / 10
+            });
+          }
+          calc.frames = 0;
+          calc.accumMs = 0;
+        }
 
         const st = simStateRef.current;
         const inSim = st.screen === 'SIMULATION';
@@ -540,6 +580,7 @@ export default function App() {
       destroyed = true;
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('orientationchange', handleResize);
+      window.removeEventListener('scroll', handleScroll);
       if (resizeObserver) resizeObserver.disconnect();
       app.destroy(true, { children: true });
     };
@@ -605,6 +646,26 @@ export default function App() {
       destroyArenas();
     }
   }, [screen, syncArenaLayout, destroyArenas]);
+
+  // Re-sync layout when debug mode or inspector is toggled, and observe arena anchors for layout changes
+  useEffect(() => {
+    if (screen === 'SIMULATION') {
+      syncArenaLayout();
+      const t = setTimeout(() => syncArenaLayout(), 50);
+
+      let anchorObserver: ResizeObserver | null = null;
+      if (typeof ResizeObserver !== 'undefined') {
+        anchorObserver = new ResizeObserver(() => syncArenaLayout());
+        if (p1AnchorRef.current) anchorObserver.observe(p1AnchorRef.current);
+        if (p2AnchorRef.current) anchorObserver.observe(p2AnchorRef.current);
+      }
+
+      return () => {
+        clearTimeout(t);
+        if (anchorObserver) anchorObserver.disconnect();
+      };
+    }
+  }, [screen, debugConfig.enabled, debugConfig.showInspector, syncArenaLayout]);
 
   // Auto-transition to EDITOR scene 5 seconds after match finishes (unless paused in Debug Mode)
   useEffect(() => {
@@ -1142,96 +1203,84 @@ export default function App() {
           Driven by CFG.LAYOUT.PORTRAIT and CFG.LAYOUT.LANDSCAPE in config.ts
       ═══════════════════════════════════════════════════════════════════ */}
       {booted && screen === 'SIMULATION' && (
-        <div
-          style={{
-            paddingLeft: activeLayout.PADDING_X,
-            paddingRight: activeLayout.PADDING_X,
-            paddingTop: activeLayout.PADDING_Y,
-            paddingBottom: activeLayout.PADDING_Y
-          }}
-          className="relative z-20 flex flex-col items-center justify-between w-full h-full pointer-events-none"
-        >
-          {/* Top Duel Timer & Phase Display (Tweakable via CFG.LAYOUT.*.TIMER_HUD) */}
-          <div
-            style={{
-              transform: `translateY(${hudCfg.OFFSET_Y}px)`
-            }}
-            className="w-full max-w-5xl mx-auto flex flex-col items-center justify-center shrink-0"
-          >
-            <div
-              style={{ fontSize: hudCfg.TITLE_FONT_SIZE }}
-              className="font-pixel tracking-widest text-slate-400 mb-1"
-            >
-              {duelPhase === 'OVERTIME'
-                ? `FINAL STRIKE · ${overtimeRemaining} BLOCKS LEFT`
-                : duelPhase === 'SLOWMO' || duelPhase === 'FINISHED'
-                ? 'EXCAVATION COMPLETE'
-                : 'MINING DUELS!'}
-            </div>
-            <div
-              style={{
-                fontSize: hudCfg.TIMER_FONT_SIZE,
-                textShadow: '0 2px 0 #000'
-              }}
-              className={`font-pixel tracking-wider ${
-                duelPhase === 'OVERTIME' || timeLeft <= 5
-                  ? 'text-rose-500'
-                  : 'text-cyan-400'
-              }`}
-            >
-              {duelPhase === 'OVERTIME'
-                ? 'OVERTIME!'
-                : duelPhase === 'SLOWMO' || duelPhase === 'FINISHED'
-                ? 'FINISHED!'
-                : `${Math.ceil(timeLeft).toString().padStart(2, '0')}s`}
-            </div>
+        <>
+          {/* Top Fixed Debug Mode Toolbar with Live FPS Counter (Visible ONLY when Debug Mode is enabled) */}
+          {debugConfig.enabled && (
+            <div className="fixed top-2 left-1/2 -translate-x-1/2 z-40 max-w-[96vw] flex flex-wrap items-center justify-center gap-1.5 sm:gap-2 bg-[#090d16]/95 border border-emerald-500/80 px-2.5 sm:px-3 py-1.5 pointer-events-auto shadow-[0_4px_24px_rgba(0,0,0,0.85)] backdrop-blur-md">
+              <span className="font-pixel text-[9px] text-emerald-400 flex items-center gap-1 shrink-0">
+                <Bug className="w-3 h-3" />
+                DBG
+              </span>
 
-            {/* Debug Mode Step-by-Step Frame Controls (Visible ONLY when Debug Mode is enabled) */}
-            {debugConfig.enabled && (
-              <div className="mt-2 flex flex-wrap items-center justify-center gap-1.5 bg-[#090d16]/95 border border-emerald-500/70 px-2.5 py-1.5 pointer-events-auto shadow-lg">
-                <span className="font-pixel text-[9px] text-emerald-400 mr-1 flex items-center gap-1">
-                  <Bug className="w-3 h-3" />
-                  DBG
-                </span>
-
-                <button
-                  onClick={() => {
-                    AudioSys.play('click');
-                    setDebugConfig((prev) => ({ ...prev, paused: !prev.paused }));
-                  }}
-                  className={`flex items-center gap-1 px-2 py-1 text-[9px] font-pixel border cursor-pointer ${
-                    debugConfig.paused
-                      ? 'bg-amber-500/20 border-amber-400 text-amber-300'
-                      : 'bg-slate-900 border-slate-700 text-slate-200 hover:border-cyan-400'
+              {/* Real-time FPS & Frame-time Counter */}
+              <div className="flex items-center gap-1.5 px-2 py-0.5 bg-[#04060a] border border-slate-800 font-mono-tabular text-[9px] sm:text-[10px] shrink-0">
+                <div
+                  className={`w-1.5 h-1.5 rounded-full ${
+                    fpsInfo.fps >= 55
+                      ? 'bg-emerald-400 shadow-[0_0_6px_#34d399]'
+                      : fpsInfo.fps >= 35
+                      ? 'bg-amber-400 shadow-[0_0_6px_#fbbf24]'
+                      : 'bg-rose-500 shadow-[0_0_6px_#f43f5e]'
+                  }`}
+                />
+                <span
+                  className={`font-semibold ${
+                    fpsInfo.fps >= 55
+                      ? 'text-emerald-400'
+                      : fpsInfo.fps >= 35
+                      ? 'text-amber-400'
+                      : 'text-rose-400'
                   }`}
                 >
-                  {debugConfig.paused ? (
-                    <>
-                      <Play className="w-3 h-3" /> RESUME
-                    </>
-                  ) : (
-                    <>
-                      <Pause className="w-3 h-3" /> PAUSE
-                    </>
-                  )}
-                </button>
+                  {fpsInfo.fps.toFixed(1)} FPS
+                </span>
+                <span className="text-slate-400 text-[8px] sm:text-[9px]">
+                  {fpsInfo.ms.toFixed(1)}ms
+                </span>
+              </div>
 
-                <button
-                  onClick={() => stepSimulationTicks(1)}
-                  className="flex items-center gap-1 px-2 py-1 text-[9px] font-pixel bg-slate-900 border border-slate-700 text-cyan-300 hover:border-cyan-400 cursor-pointer"
-                  title="Advance exactly 1 deterministic tick"
-                >
-                  <StepForward className="w-3 h-3" /> +1T
-                </button>
+              {/* Transport: Pause/Resume */}
+              <button
+                onClick={() => {
+                  AudioSys.play('click');
+                  setDebugConfig((prev) => ({ ...prev, paused: !prev.paused }));
+                }}
+                className={`flex items-center gap-1 px-2 py-1 text-[9px] font-pixel border cursor-pointer shrink-0 ${
+                  debugConfig.paused
+                    ? 'bg-amber-500/20 border-amber-400 text-amber-300'
+                    : 'bg-slate-900 border-slate-700 text-slate-200 hover:border-cyan-400'
+                }`}
+              >
+                {debugConfig.paused ? (
+                  <>
+                    <Play className="w-3 h-3" /> RESUME
+                  </>
+                ) : (
+                  <>
+                    <Pause className="w-3 h-3" /> PAUSE
+                  </>
+                )}
+              </button>
 
-                <button
-                  onClick={() => stepSimulationTicks(10)}
-                  className="flex items-center gap-1 px-2 py-1 text-[9px] font-pixel bg-slate-900 border border-slate-700 text-cyan-300 hover:border-cyan-400 cursor-pointer"
-                  title="Advance 10 deterministic ticks"
-                >
-                  <FastForward className="w-3 h-3" /> +10T
-                </button>
+              {/* Frame Stepping */}
+              <button
+                onClick={() => stepSimulationTicks(1)}
+                className="flex items-center gap-1 px-1.5 py-1 text-[9px] font-pixel bg-slate-900 border border-slate-700 text-cyan-300 hover:border-cyan-400 cursor-pointer shrink-0"
+                title="Advance exactly 1 deterministic tick"
+              >
+                <StepForward className="w-3 h-3" /> +1T
+              </button>
 
+              <button
+                onClick={() => stepSimulationTicks(10)}
+                className="flex items-center gap-1 px-1.5 py-1 text-[9px] font-pixel bg-slate-900 border border-slate-700 text-cyan-300 hover:border-cyan-400 cursor-pointer shrink-0"
+                title="Advance 10 deterministic ticks"
+              >
+                <FastForward className="w-3 h-3" /> +10T
+              </button>
+
+              {/* Speed Multipliers */}
+              <div className="flex items-center gap-0.5 shrink-0">
                 {[0.25, 0.5, 1, 2].map((spd) => (
                   <button
                     key={spd}
@@ -1243,7 +1292,7 @@ export default function App() {
                         paused: false
                       }));
                     }}
-                    className={`px-1.5 py-1 text-[9px] font-pixel border cursor-pointer ${
+                    className={`px-1.5 py-1 text-[8px] sm:text-[9px] font-pixel border cursor-pointer ${
                       !debugConfig.paused && debugConfig.speedMultiplier === spd
                         ? 'bg-cyan-500/25 border-cyan-400 text-cyan-300'
                         : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'
@@ -1252,224 +1301,340 @@ export default function App() {
                     {spd}x
                   </button>
                 ))}
-
-                <button
-                  onClick={() => startDuel(selectedMinits.slice(0, 2))}
-                  className="flex items-center gap-1 px-2 py-1 text-[9px] font-pixel bg-slate-900 border border-slate-700 text-slate-300 hover:border-cyan-400 cursor-pointer"
-                  title="Restart Debug Match"
-                >
-                  <RotateCcw className="w-3 h-3" /> RST
-                </button>
-
-                <button
-                  onClick={() => {
-                    AudioSys.play('click');
-                    setScreen('EDITOR');
-                  }}
-                  className="px-2 py-1 text-[9px] font-pixel bg-slate-900 border border-slate-700 text-rose-300 hover:border-rose-400 cursor-pointer"
-                >
-                  EXIT
-                </button>
               </div>
-            )}
-          </div>
 
-          {/* Dual Arena Viewport Frames — Always Side-by-Side, Configured via CFG.LAYOUT */}
+              {/* Overlays: Hitboxes & Grid */}
+              <button
+                onClick={() => {
+                  AudioSys.play('click');
+                  setDebugConfig((prev) => ({ ...prev, showHitboxes: !prev.showHitboxes }));
+                }}
+                className={`px-1.5 py-1 text-[8px] sm:text-[9px] font-pixel border cursor-pointer shrink-0 ${
+                  debugConfig.showHitboxes
+                    ? 'bg-emerald-500/20 border-emerald-400 text-emerald-300'
+                    : 'bg-slate-900 border-slate-800 text-slate-500'
+                }`}
+                title="Toggle Hitbox / Trajectory wireframes"
+              >
+                BOXES
+              </button>
+
+              <button
+                onClick={() => {
+                  AudioSys.play('click');
+                  setDebugConfig((prev) => ({ ...prev, showGridCoords: !prev.showGridCoords }));
+                }}
+                className={`px-1.5 py-1 text-[8px] sm:text-[9px] font-pixel border cursor-pointer shrink-0 ${
+                  debugConfig.showGridCoords
+                    ? 'bg-cyan-500/20 border-cyan-400 text-cyan-300'
+                    : 'bg-slate-900 border-slate-800 text-slate-500'
+                }`}
+                title="Toggle Subterranean Grid Coordinates overlay"
+              >
+                GRID
+              </button>
+
+              <button
+                onClick={() => {
+                  AudioSys.play('click');
+                  setDebugConfig((prev) => ({ ...prev, showInspector: !prev.showInspector }));
+                }}
+                className={`px-1.5 py-1 text-[8px] sm:text-[9px] font-pixel border cursor-pointer shrink-0 ${
+                  debugConfig.showInspector
+                    ? 'bg-amber-500/20 border-amber-400 text-amber-300'
+                    : 'bg-slate-900 border-slate-800 text-slate-500'
+                }`}
+                title="Toggle Entity & Slot Inspector"
+              >
+                INSP
+              </button>
+
+              {/* Restart */}
+              <button
+                onClick={() => startDuel(selectedMinits.slice(0, 2))}
+                className="flex items-center gap-1 px-1.5 py-1 text-[9px] font-pixel bg-slate-900 border border-slate-700 text-slate-300 hover:border-cyan-400 cursor-pointer shrink-0"
+                title="Restart Debug Match"
+              >
+                <RotateCcw className="w-3 h-3" /> RST
+              </button>
+
+              {/* Exit */}
+              <button
+                onClick={() => {
+                  AudioSys.play('click');
+                  setScreen('EDITOR');
+                }}
+                className="px-2 py-1 text-[9px] font-pixel bg-slate-900 border border-slate-700 text-rose-300 hover:border-rose-400 cursor-pointer shrink-0"
+              >
+                EXIT
+              </button>
+            </div>
+          )}
+
           <div
             style={{
-              gap: activeLayout.ARENA_GAP,
-              transform: `translate(${activeLayout.OFFSET_X}px, ${activeLayout.OFFSET_Y}px)`
+              paddingLeft: activeLayout.PADDING_X,
+              paddingRight: activeLayout.PADDING_X,
+              paddingTop: activeLayout.PADDING_Y,
+              paddingBottom: activeLayout.PADDING_Y
             }}
-            className="flex-1 flex flex-row items-center justify-center w-full my-auto"
+            className="relative z-20 flex flex-col items-center justify-between w-full h-full pointer-events-none"
           >
-            {[0, 1].map((idx) => {
-              const tel = telemetry[idx];
-              const mId = selectedMinits[idx];
-              const m = MINIT_DB[mId];
-              const colorHex = m ? numToHex(m.color) : PALETTE.NEON;
+            {/* Top Duel Timer & Phase Display (Tweakable via CFG.LAYOUT.*.TIMER_HUD) */}
+            <div
+              style={{
+                transform: `translateY(${hudCfg.OFFSET_Y}px)`
+              }}
+              className="w-full max-w-5xl mx-auto flex flex-col items-center justify-center shrink-0"
+            >
+              <div
+                style={{ fontSize: hudCfg.TITLE_FONT_SIZE }}
+                className="font-pixel tracking-widest text-slate-400 mb-1"
+              >
+                {duelPhase === 'OVERTIME'
+                  ? `FINAL STRIKE · ${overtimeRemaining} BLOCKS LEFT`
+                  : duelPhase === 'SLOWMO' || duelPhase === 'FINISHED'
+                  ? 'EXCAVATION COMPLETE'
+                  : 'MINING DUELS!'}
+              </div>
+              <div
+                style={{
+                  fontSize: hudCfg.TIMER_FONT_SIZE,
+                  textShadow: '0 2px 0 #000'
+                }}
+                className={`font-pixel tracking-wider ${
+                  duelPhase === 'OVERTIME' || timeLeft <= 5
+                    ? 'text-rose-500'
+                    : 'text-cyan-400'
+                }`}
+              >
+                {duelPhase === 'OVERTIME'
+                  ? 'OVERTIME!'
+                  : duelPhase === 'SLOWMO' || duelPhase === 'FINISHED'
+                  ? 'FINISHED!'
+                  : `${Math.ceil(timeLeft).toString().padStart(2, '0')}s`}
+              </div>
+            </div>
 
-              return (
-                <div key={idx} className="flex flex-col items-center shrink-0">
-                  {/* Top Mini Telemetry Header (Tweakable via CFG.LAYOUT.*.TELEMETRY_BAR) */}
-                  {telCfg.SHOW && (
-                    <div
-                      style={{
-                        width: arenaW,
-                        paddingLeft: telCfg.PADDING_X,
-                        paddingRight: telCfg.PADDING_X,
-                        paddingTop: telCfg.PADDING_Y,
-                        paddingBottom: telCfg.PADDING_Y,
-                        fontSize: telCfg.FONT_SIZE,
-                        transform: `translateY(${telCfg.OFFSET_Y}px)`
-                      }}
-                      className="flex items-center justify-between bg-[#0a0c12]/95 border border-b-0 border-slate-700/80 font-mono-tabular"
-                    >
-                      <div className="flex items-center gap-1.5 sm:gap-2.5 text-slate-300 min-w-0">
-                        <span className="flex items-center gap-1">
-                          <Layers
-                            style={{ width: telCfg.ICON_SIZE, height: telCfg.ICON_SIZE }}
-                            className="text-cyan-400 shrink-0"
-                          />
-                          <span>
-                            {isCompactArena ? `${tel?.depth ?? 0}m` : `Depth:${tel?.depth ?? 0}`}
-                          </span>
-                        </span>
-                        <span className="text-slate-600">·</span>
-                        <span className="flex items-center gap-1">
-                          <Pickaxe
-                            style={{ width: telCfg.ICON_SIZE, height: telCfg.ICON_SIZE }}
-                            className="text-amber-400 shrink-0"
-                          />
-                          <span>
-                            {isCompactArena ? `${tel?.mined ?? 0}` : `Mined:${tel?.mined ?? 0}`}
-                          </span>
-                        </span>
-                      </div>
-                      <span className="font-semibold text-white shrink-0">
-                        {isCompactArena ? `${tel?.score ?? 0}` : `PTS: ${tel?.score ?? 0}`}
-                      </span>
-                    </div>
-                  )}
+            {/* Dual Arena Viewport Frames — Always Side-by-Side, Configured via CFG.LAYOUT */}
+            <div
+              style={{
+                gap: activeLayout.ARENA_GAP,
+                transform: `translate(${activeLayout.OFFSET_X}px, ${activeLayout.OFFSET_Y}px)`
+              }}
+              className="flex-1 flex flex-row items-start justify-center w-full my-auto"
+            >
+              {[0, 1].map((idx) => {
+                const tel = telemetry[idx];
+                const mId = selectedMinits[idx];
+                const m = MINIT_DB[mId];
+                const colorHex = m ? numToHex(m.color) : PALETTE.NEON;
 
-                  {/* Exact-Sized Pixel Anchor for PixiJS Arena */}
-                  <div
-                    ref={idx === 0 ? p1AnchorRef : p2AnchorRef}
-                    style={{ width: arenaW, height: arenaH }}
-                    className="relative border border-slate-600/80 shadow-[0_0_24px_rgba(0,0,0,0.85)]"
-                  />
-
-                  {/* Bottom Minit Card (Tweakable via CFG.LAYOUT.*.MINIT_CARD) */}
-                  {m && cardCfg.SHOW && (
-                    <div
-                      style={{
-                        width: cardWidth,
-                        marginTop: cardCfg.MARGIN_TOP,
-                        padding: cardCfg.PADDING,
-                        transform: `translate(${cardCfg.OFFSET_X}px, ${cardCfg.OFFSET_Y}px)`
-                      }}
-                      className="bg-[#0a0c12]/95 border border-slate-800 pointer-events-auto"
-                    >
+                return (
+                  <div key={idx} className="flex flex-col items-center shrink-0">
+                    {/* Top Mini Telemetry Header (Tweakable via CFG.LAYOUT.*.TELEMETRY_BAR) */}
+                    {telCfg.SHOW && (
                       <div
                         style={{
-                          height: cardCfg.ACCENT_BAR_HEIGHT,
-                          backgroundColor: colorHex
+                          width: arenaW,
+                          paddingLeft: telCfg.PADDING_X,
+                          paddingRight: telCfg.PADDING_X,
+                          paddingTop: telCfg.PADDING_Y,
+                          paddingBottom: telCfg.PADDING_Y,
+                          fontSize: telCfg.FONT_SIZE,
+                          transform: `translateY(${telCfg.OFFSET_Y}px)`
                         }}
-                        className="w-full mb-1.5"
-                      />
-                      <div className="flex items-start gap-2 min-w-0">
+                        className="flex items-center justify-between bg-[#0a0c12]/95 border border-b-0 border-slate-700/80 font-mono-tabular"
+                      >
+                        <div className="flex items-center gap-1.5 sm:gap-2.5 text-slate-300 min-w-0">
+                          <span className="flex items-center gap-1">
+                            <Layers
+                              style={{ width: telCfg.ICON_SIZE, height: telCfg.ICON_SIZE }}
+                              className="text-cyan-400 shrink-0"
+                            />
+                            <span>
+                              {isCompactArena ? `${tel?.depth ?? 0}m` : `Depth:${tel?.depth ?? 0}`}
+                            </span>
+                          </span>
+                          <span className="text-slate-600">·</span>
+                          <span className="flex items-center gap-1">
+                            <Pickaxe
+                              style={{ width: telCfg.ICON_SIZE, height: telCfg.ICON_SIZE }}
+                              className="text-amber-400 shrink-0"
+                            />
+                            <span>
+                              {isCompactArena ? `${tel?.mined ?? 0}` : `Mined:${tel?.mined ?? 0}`}
+                            </span>
+                          </span>
+                        </div>
+                        <span className="font-semibold text-white shrink-0">
+                          {isCompactArena ? `${tel?.score ?? 0}` : `PTS: ${tel?.score ?? 0}`}
+                        </span>
+                      </div>
+                    )}
+
+                    {/* Exact-Sized Pixel Anchor for PixiJS Arena */}
+                    <div
+                      ref={idx === 0 ? p1AnchorRef : p2AnchorRef}
+                      style={{ width: arenaW, height: arenaH }}
+                      className="relative border border-slate-600/80 shadow-[0_0_24px_rgba(0,0,0,0.85)]"
+                    />
+
+                    {/* Bottom Minit Card (Tweakable via CFG.LAYOUT.*.MINIT_CARD) */}
+                    {m && cardCfg.SHOW && (
+                      <div
+                        style={{
+                          width: cardWidth,
+                          marginTop: cardCfg.MARGIN_TOP,
+                          padding: cardCfg.PADDING,
+                          transform: `translate(${cardCfg.OFFSET_X}px, ${cardCfg.OFFSET_Y}px)`
+                        }}
+                        className="bg-[#0a0c12]/95 border border-slate-800 pointer-events-auto"
+                      >
                         <div
                           style={{
-                            width: cardCfg.ICON_BOX_SIZE,
-                            height: cardCfg.ICON_BOX_SIZE
+                            height: cardCfg.ACCENT_BAR_HEIGHT,
+                            backgroundColor: colorHex
                           }}
-                          className="bg-[#05060a] border border-slate-800 flex items-center justify-center shrink-0"
-                        >
-                          {MinitPreviewDataUrls[m.id] && (
-                            <img
-                              src={MinitPreviewDataUrls[m.id]}
-                              alt={m.name}
-                              style={{
-                                width: cardCfg.ICON_SPRITE_SIZE,
-                                height: cardCfg.ICON_SPRITE_SIZE
-                              }}
-                              className="object-contain pixelated-canvas"
-                              referrerPolicy="no-referrer"
-                            />
-                          )}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-center justify-between gap-1">
-                            <span
-                              style={{
-                                color: colorHex,
-                                fontSize: cardCfg.NAME_FONT_SIZE
-                              }}
-                              className="font-pixel truncate"
-                            >
-                              {m.name}
-                            </span>
-
-                            {/* Active Effects Readout */}
-                            {tel && tel.effects.length > 0 && (
-                              <div className="flex items-center gap-1 text-[9px] sm:text-[10px] font-mono-tabular shrink-0">
-                                {tel.effects.map((eff) => (
-                                  <span
-                                    key={eff.id}
-                                    style={{ color: eff.colorHex }}
-                                    className="font-semibold"
-                                  >
-                                    {eff.label}
-                                    {eff.stacks > 1 ? `×${eff.stacks}` : ''}
-                                  </span>
-                                ))}
-                              </div>
+                          className="w-full mb-1.5"
+                        />
+                        <div className="flex items-start gap-2 min-w-0">
+                          <div
+                            style={{
+                              width: cardCfg.ICON_BOX_SIZE,
+                              height: cardCfg.ICON_BOX_SIZE
+                            }}
+                            className="bg-[#05060a] border border-slate-800 flex items-center justify-center shrink-0"
+                          >
+                            {MinitPreviewDataUrls[m.id] && (
+                              <img
+                                src={MinitPreviewDataUrls[m.id]}
+                                alt={m.name}
+                                style={{
+                                  width: cardCfg.ICON_SPRITE_SIZE,
+                                  height: cardCfg.ICON_SPRITE_SIZE
+                                }}
+                                className="object-contain pixelated-canvas"
+                                referrerPolicy="no-referrer"
+                              />
                             )}
                           </div>
-                          <p
-                            style={{
-                              fontSize: cardCfg.DESC_FONT_SIZE,
-                              WebkitLineClamp: cardCfg.DESC_MAX_LINES,
-                              display: '-webkit-box',
-                              WebkitBoxOrient: 'vertical',
-                              overflow: 'hidden'
-                            }}
-                            className="text-slate-300 leading-snug mt-0.5"
-                          >
-                            {m.desc}
-                          </p>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between gap-1">
+                              <span
+                                style={{
+                                  color: colorHex,
+                                  fontSize: cardCfg.NAME_FONT_SIZE
+                                }}
+                                className="font-pixel truncate"
+                              >
+                                {m.name}
+                              </span>
+
+                              {/* Active Effects Readout */}
+                              {tel && tel.effects.length > 0 && (
+                                <div className="flex items-center gap-1 text-[9px] sm:text-[10px] font-mono-tabular shrink-0">
+                                  {tel.effects.map((eff) => (
+                                    <span
+                                      key={eff.id}
+                                      style={{ color: eff.colorHex }}
+                                      className="font-semibold"
+                                    >
+                                      {eff.label}
+                                      {eff.stacks > 1 ? `×${eff.stacks}` : ''}
+                                    </span>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                            <p
+                              style={{
+                                fontSize: cardCfg.DESC_FONT_SIZE,
+                                WebkitLineClamp: cardCfg.DESC_MAX_LINES,
+                                display: '-webkit-box',
+                                WebkitBoxOrient: 'vertical',
+                                overflow: 'hidden'
+                              }}
+                              className="text-slate-300 leading-snug mt-0.5"
+                            >
+                              {m.desc}
+                            </p>
+                          </div>
                         </div>
                       </div>
+                    )}
 
-                      {/* Live Debug Entity & Slot Inspector (Visible ONLY when Debug Mode + Inspector are enabled) */}
-                      {debugConfig.enabled && debugConfig.showInspector && tel?.debug && (
-                        <div className="mt-2 pt-2 border-t border-slate-800 text-[9px] font-mono-tabular text-slate-300 space-y-1">
-                          <div className="flex items-center justify-between text-emerald-300">
-                            <span>
-                              TICK:{tel.debug.simTicks} · GRID:({tel.debug.gridX},{tel.debug.gridY})
-                            </span>
-                            <span>
-                              CD:{tel.debug.cdTick}/{tel.debug.cdMax}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between text-slate-400">
-                            <span>
-                              SPD:{tel.debug.speedMul}x · DMG:{tel.debug.dmgMul}x
-                            </span>
-                            <span className="text-amber-300">
-                              ENTS:{tel.debug.activeEntCount}
-                            </span>
-                          </div>
-                          {Object.keys(tel.debug.customState).length > 0 && (
-                            <div className="text-[8px] text-cyan-300/90 truncate">
-                              STATE: {JSON.stringify(tel.debug.customState)}
-                            </div>
-                          )}
-                          {tel.debug.entities.length > 0 && (
-                            <div className="max-h-20 overflow-y-auto bg-[#06080e] border border-slate-800/90 p-1 space-y-0.5">
-                              {tel.debug.entities.slice(0, 6).map((ent) => (
-                                <div
-                                  key={ent.entId}
-                                  className="flex items-center justify-between gap-1 text-[8px]"
-                                >
-                                  <span className="text-amber-300 truncate">
-                                    #{ent.entId} ({ent.x},{ent.y}) L:{ent.life}
-                                  </span>
-                                  <span className="text-slate-400 truncate">
-                                    [{ent.traits.slice(0, 2).join(', ')}]
-                                  </span>
-                                </div>
-                              ))}
-                            </div>
-                          )}
+                    {/* Live Debug Entity & Slot Inspector — Docked to match arena width & layout 1:1 */}
+                    {debugConfig.enabled && debugConfig.showInspector && tel?.debug && (
+                      <div
+                        style={{
+                          width: arenaW,
+                          marginTop: 6
+                        }}
+                        className="bg-[#090d16]/95 border border-emerald-500/70 p-2 shadow-xl pointer-events-auto text-[9px] font-mono-tabular text-slate-300 space-y-1.5"
+                      >
+                        <div className="flex items-center justify-between border-b border-slate-800 pb-1">
+                          <span
+                            className="font-pixel text-[8px] flex items-center gap-1"
+                            style={{ color: colorHex }}
+                          >
+                            <Bug className="w-2.5 h-2.5" />
+                            P{idx + 1} DEBUG · {m?.name}
+                          </span>
+                          <span className="text-[8px] text-slate-400">
+                            TICK {tel.debug.simTicks}
+                          </span>
                         </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
+
+                        <div className="flex items-center justify-between text-slate-300">
+                          <span>
+                            GRID: ({tel.debug.gridX}, {tel.debug.gridY})
+                          </span>
+                          <span>
+                            CD: {tel.debug.cdTick}/{tel.debug.cdMax}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center justify-between text-slate-400">
+                          <span>
+                            SPD: {tel.debug.speedMul}x · DMG: {tel.debug.dmgMul}x
+                          </span>
+                          <span className="text-amber-300 font-semibold">
+                            ENTS: {tel.debug.activeEntCount}
+                          </span>
+                        </div>
+
+                        {Object.keys(tel.debug.customState).length > 0 && (
+                          <div className="text-[8px] text-cyan-300/90 truncate bg-slate-950/80 px-1 py-0.5 border border-slate-800/80">
+                            STATE: {JSON.stringify(tel.debug.customState)}
+                          </div>
+                        )}
+
+                        {tel.debug.entities.length > 0 && (
+                          <div className="max-h-24 overflow-y-auto bg-[#05070c] border border-slate-800/90 p-1 space-y-0.5">
+                            {tel.debug.entities.slice(0, 8).map((ent) => (
+                              <div
+                                key={ent.entId}
+                                className="flex items-center justify-between gap-1 text-[8px]"
+                              >
+                                <span className="text-amber-300 truncate">
+                                  #{ent.entId} ({ent.x},{ent.y}) L:{ent.life}
+                                </span>
+                                <span className="text-slate-400 truncate">
+                                  [{ent.traits.slice(0, 2).join(', ')}]
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
           </div>
-        </div>
+        </>
       )}
 
       {/* ═══════════════════════════════════════════════════════════════════

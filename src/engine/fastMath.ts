@@ -38,8 +38,37 @@ export const FastMath = {
   }
 };
 
-// Initialize LUT immediately so deferred functions always have valid sin/cos
+// Precomputed Drag LUT for physics particles to eliminate dynamic Math.pow in hot animation loops
+export const DragLUT = {
+  // Precomputed Float32 steps for timeScale from 0.0 to 2.5 in 0.05 increments (51 entries)
+  dragX: new Float32Array(51),
+  dragY: new Float32Array(51),
+  _ready: false,
+
+  init(defaultDragX = 0.9, defaultDragY = 0.95) {
+    if (this._ready) return;
+    for (let i = 0; i <= 50; i++) {
+      const ts = i * 0.05;
+      this.dragX[i] = Math.pow(defaultDragX, ts);
+      this.dragY[i] = Math.pow(defaultDragY, ts);
+    }
+    this._ready = true;
+  },
+
+  getDragX(timeScale: number): number {
+    const idx = Math.min(50, Math.max(0, Math.round(timeScale * 20)));
+    return this.dragX[idx];
+  },
+
+  getDragY(timeScale: number): number {
+    const idx = Math.min(50, Math.max(0, Math.round(timeScale * 20)));
+    return this.dragY[idx];
+  }
+};
+
+// Initialize LUTs immediately so deferred functions always have valid sin/cos and drag values
 FastMath.init();
+DragLUT.init();
 
 export class SparseSet<T> {
   public items: T[] = [];
