@@ -25,7 +25,7 @@ export const turretMinit: MinitDef<TurretConfig, TurretState> = {
   desc: 'Deploys static laser sentries that continuously fire 6-bolt fan spreads downward.',
 
   config: {
-    dmg: 25,
+    dmg: 29,
     boltSpeed: 1.5,
     turretLife: 300,
     castInterval: 25,

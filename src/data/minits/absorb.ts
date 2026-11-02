@@ -35,7 +35,7 @@ export const absorbMinit: MinitDef<AbsorbConfig, AbsorbState> = {
     shake: 3,
     flash: 0.1,
     baseRange: 1,
-    rangeScale: 0.025,
+    rangeScale: 0.02,
     baseTargets: 3,
     targetScale: 0.027,
     maxTargets: 30,

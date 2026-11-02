@@ -86,8 +86,8 @@ export const CFG = {
     PORTRAIT_MAX_WIDTH: 768,
 
     PORTRAIT: {
-      MIN_SCALE: 0.4375,
-      MAX_SCALE: 1.5,
+      MIN_SCALE: 0.8,
+      MAX_SCALE: 1.8,
       SCALE_MULTIPLIER: 1.0,
       FIXED_SCALE: 0,
       SCALE_STEP: 0.0625,
@@ -97,10 +97,10 @@ export const CFG = {
       RESERVE_WIDTH: 26,
       RESERVE_HEIGHT: 190,
       OFFSET_X: 0,
-      OFFSET_Y: 0,
+      OFFSET_Y: -80,
       TIMER_HUD: {
-        OFFSET_Y: 0,
-        TITLE_FONT_SIZE: 9,
+        OFFSET_Y: 220,
+        TITLE_FONT_SIZE: 25,
         TIMER_FONT_SIZE: 18
       },
       TELEMETRY_BAR: {
@@ -117,12 +117,12 @@ export const CFG = {
         WIDTH_RATIO: 1.0,
         MARGIN_TOP: 6,
         OFFSET_X: 0,
-        OFFSET_Y: 0,
+        OFFSET_Y: -50,
         PADDING: 6,
         ACCENT_BAR_HEIGHT: 2,
         ICON_BOX_SIZE: 28,
         ICON_SPRITE_SIZE: 20,
-        NAME_FONT_SIZE: 9,
+        NAME_FONT_SIZE: 11,
         DESC_FONT_SIZE: 10,
         DESC_MAX_LINES: 2
       }

@@ -3,7 +3,6 @@ import { EffectRegistry } from '../effects';
 import { registerAudioProfiles } from '../sfx';
 import { absorbMinit } from './absorb';
 import { alchemistMinit } from './alchemist';
-import { bomberMinit } from './bomber';
 import { frenzyMinit } from './frenzy';
 import { laserMinit } from './laser';
 import { lithosMinit } from './lithos';
@@ -21,8 +20,7 @@ export const MINIT_LIST: MinitDef<any, any>[] = [
   sentinelMinit,
   frenzyMinit,
   alchemistMinit,
-  turretMinit,
-  bomberMinit
+  turretMinit
 ];
 
 export const CORE_MINIT_IDS = new Set<string>(MINIT_LIST.map((m) => m.id));
