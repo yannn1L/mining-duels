@@ -171,24 +171,30 @@ export const Trait = {
       });
     },
 
-    toTarget(opts: { targetRef?: { x: number; y: number } | null } = {}): TraitFn {
+    toTarget(opts: {
+      targetRef?: { x: number; y: number } | null;
+      arcHeight?: number;
+    } = {}): TraitFn {
       return tagTrait(
         'move.toTarget',
         (e) => {
           const pct = 1 - e.l / Math.max(1, e.maxL);
           const t = opts.targetRef || e.p.targetRef || { x: e.tx, y: e.ty };
           const clampedPct = Math.max(0, Math.min(1, pct));
+          const arc = opts.arcHeight ?? e.p.arcHeight ?? 0;
+          const arcOffset =
+            arc !== 0 ? -Math.sin(clampedPct * Math.PI) * arc : 0;
 
           e.curX = e.startX + (t.x - e.startX) * clampedPct;
-          e.curY = e.startY + (t.y - e.startY) * clampedPct;
+          e.curY = e.startY + (t.y - e.startY) * clampedPct + arcOffset;
 
           if (pct >= 1) {
             e.curX = t.x;
             e.curY = t.y;
           }
 
-          e.x = e.curX | 0;
-          e.y = e.curY | 0;
+          e.x = Math.round(e.curX);
+          e.y = Math.round(e.curY);
         },
         { hasTarget: true, targetRef: opts.targetRef }
       );
@@ -244,12 +250,17 @@ export const Trait = {
       targetRef: { x: number; y: number };
       radius?: number;
       speed?: number;
+      startAngle?: number;
     }): TraitFn {
       return tagTrait(
         'move.orbit',
         (e) => {
           const target = opts.targetRef || e.p.targetRef;
           if (!target) return;
+          if (opts.startAngle !== undefined && !e.state._orbitInit) {
+            e.ang = opts.startAngle;
+            e.state._orbitInit = true;
+          }
           const speed = opts.speed ?? e.p.orbitSpeed ?? 0.08;
           const radius = opts.radius ?? e.p.orbitRadius ?? 2.5;
           e.ang = (e.ang || 0) + speed;
@@ -277,19 +288,119 @@ export const Trait = {
     }
   },
 
+  // Alias namespace `Trait.motion` for README / Custom Minit compatibility
+  motion: {
+    linear(): TraitFn {
+      return Trait.move.linear();
+    },
+
+    gravity(): TraitFn {
+      return Trait.move.gravityFall();
+    },
+
+    lerpToTarget(opts: {
+      tx?: number;
+      ty?: number;
+      duration?: number;
+      arcHeight?: number;
+      dieOnArrive?: boolean;
+    } = {}): TraitFn {
+      return tagTrait(
+        'motion.lerpToTarget',
+        (e) => {
+          if (opts.tx !== undefined) e.tx = opts.tx;
+          if (opts.ty !== undefined) e.ty = opts.ty;
+          const pct = 1 - e.l / Math.max(1, opts.duration || e.maxL);
+          const clampedPct = Math.max(0, Math.min(1, pct));
+          const arc = opts.arcHeight ?? e.p.arcHeight ?? 0;
+          const arcOffset =
+            arc !== 0 ? -Math.sin(clampedPct * Math.PI) * arc : 0;
+
+          e.curX = e.startX + (e.tx - e.startX) * clampedPct;
+          e.curY = e.startY + (e.ty - e.startY) * clampedPct + arcOffset;
+
+          if (pct >= 1) {
+            e.curX = e.tx;
+            e.curY = e.ty;
+            if (opts.dieOnArrive !== false) e.dead = true;
+          }
+
+          e.x = Math.round(e.curX);
+          e.y = Math.round(e.curY);
+        },
+        { hasTarget: true }
+      );
+    },
+
+    homingToRef(opts: {
+      targetRef: { x: number; y: number };
+      duration?: number;
+      pullScale?: number;
+    }): TraitFn {
+      return Trait.move.toTarget({ targetRef: opts.targetRef });
+    },
+
+    orbit(opts: {
+      targetRef: { x: number; y: number };
+      radius?: number;
+      speed?: number;
+      startAngle?: number;
+    }): TraitFn {
+      return Trait.move.orbit(opts);
+    },
+
+    bounceX(opts: { shake?: number; sparkTex?: string; sound?: string } = {}): TraitFn {
+      return Trait.move.bounceX(opts);
+    }
+  },
+
   // ═══════════════════════════════════════════════════════════════════════════
   // 2. LIFECYCLE & DEATH TRAITS
   // ═══════════════════════════════════════════════════════════════════════════
   lifecycle: {
     age(): TraitFn {
       return tagTrait('lifecycle.age', (e) => {
+        e.step = (e.step || 0) + 1;
         if (--e.l <= 0) e.dead = true;
       });
     },
 
-    fuse(): TraitFn {
-      return tagTrait('lifecycle.fuse', (e) => {
-        if (e.hitGround && --e.f <= 0) e.dead = true;
+    fuse(ticks?: number, onDetonate?: (e: Entity, a: IArena) => void): TraitFn {
+      return tagTrait('lifecycle.fuse', (e, a) => {
+        if (ticks !== undefined && !e.state._fuseInit) {
+          e.f = ticks;
+          e.state._fuseInit = true;
+        }
+        if ((e.hitGround || ticks !== undefined) && --e.f <= 0) {
+          if (onDetonate) onDetonate(e, a);
+          e.dead = true;
+        }
+      });
+    },
+
+    spawnOnDeath(blueprints: BlueprintOrPayload[]): TraitFn {
+      return tagTrait('lifecycle.spawnOnDeath', (e, a) => {
+        if (!e.dead || !blueprints || blueprints.length === 0) return;
+        for (const sub of blueprints) {
+          const built = toPayload(sub);
+          if (
+            built.spawnChance !== undefined &&
+            FastMath.rand() >= built.spawnChance
+          ) {
+            continue;
+          }
+          const sx = e.x + (built.offsetX || 0);
+          const sy = e.y + (built.offsetY || 0);
+          a.spawnEnt(built, {
+            x: sx,
+            y: sy,
+            curX: sx,
+            curY: sy,
+            startX: sx,
+            startY: sy,
+            owner: e.owner
+          });
+        }
       });
     },
 
@@ -344,17 +455,37 @@ export const Trait = {
   // 3. DAMAGE & EXCAVATION TRAITS
   // ═══════════════════════════════════════════════════════════════════════════
   damage: {
-    onHit(opts: { dmg: number; color: number }): TraitFn {
+    onHit(opts: {
+      dmg: number;
+      color: number;
+      aoeRadius?: number;
+      dieOnHit?: boolean;
+      sound?: string;
+      shockRad?: number;
+      shake?: number;
+      flash?: number;
+    }): TraitFn {
       return tagTrait(
         'damage.onHit',
         (e, a) => {
           const hp = a.getHP(e.x, e.y);
           if (hp > 0 && hp !== 9999) {
-            a.dmg(e.x, e.y, opts.dmg, true, opts.color, e.owner);
-            e.dead = true;
+            if (opts.aoeRadius && opts.aoeRadius > 0) {
+              a.dmgAoE(e.x, e.y, opts.aoeRadius, opts.dmg, opts.color, e.owner);
+            } else {
+              a.dmg(e.x, e.y, opts.dmg, true, opts.color, e.owner);
+            }
+            if (opts.sound) AudioSys.play(opts.sound);
+            if (opts.shake) a.shake = Math.max(a.shake, opts.shake);
+            if (opts.flash) a.triggerFlash(opts.flash);
+            if (opts.shockRad) {
+              const p = a.getPixelCoords(e.x, e.y);
+              a.fxPool.spawnShockwave(p.px, p.py, opts.color, opts.shockRad, 4);
+            }
+            if (opts.dieOnHit !== false) e.dead = true;
           }
         },
-        { debugColor: opts.color }
+        { debugColor: opts.color, debugRadius: opts.aoeRadius }
       );
     },
 
@@ -369,6 +500,7 @@ export const Trait = {
       dmg: number;
       color: number;
       width?: number;
+      jagged?: boolean;
       renderLaser?: boolean;
     }): TraitFn {
       return tagTrait(
@@ -388,7 +520,7 @@ export const Trait = {
               opts.color,
               opts.width ?? 4,
               2,
-              false
+              opts.jagged ?? false
             );
           }
         },
@@ -607,6 +739,82 @@ export const Trait = {
     }
   },
 
+  // Alias namespace `Trait.combat` for README / Custom Minit compatibility
+  combat: {
+    collideRock(opts: {
+      dmg: number;
+      aoeRadius?: number;
+      color: number;
+      dieOnHit?: boolean;
+      sound?: string;
+      shockRad?: number;
+      shake?: number;
+      flash?: number;
+    }): TraitFn {
+      return Trait.damage.onHit(opts);
+    },
+
+    detonateAoE(opts: {
+      dmg: number;
+      radius?: number;
+      color: number;
+      sound?: string;
+      shockRad?: number;
+      shake?: number;
+      flash?: number;
+      spawnOnDeath?: BlueprintOrPayload[];
+    }): TraitFn {
+      return Trait.lifecycle.explodeOnDeath(opts);
+    },
+
+    beamColumn(opts: {
+      length: number;
+      dmg: number;
+      color: number;
+      width?: number;
+      jagged?: boolean;
+      renderLaser?: boolean;
+    }): TraitFn {
+      return Trait.damage.beam(opts);
+    },
+
+    randomAreaStrike(opts: {
+      range: number;
+      dmg: number;
+      color: number;
+      targetsPerTick?: number;
+      onDestroy?: (
+        x: number,
+        y: number,
+        arena: IArena,
+        owner: IMinitSlot | null
+      ) => void;
+    }): TraitFn {
+      return Trait.damage.randomArea(opts);
+    },
+
+    expandingRing(opts: {
+      baseDmg: number;
+      maxRadius: number;
+      speed: number;
+      color: number;
+    }): TraitFn {
+      return Trait.damage.shockwave(opts);
+    },
+
+    delayedSnap(opts: {
+      delay?: number;
+      range?: number;
+      dmg: number;
+      color?: number;
+      shake?: number;
+      flash?: number;
+      sound?: string;
+    }): TraitFn {
+      return Trait.damage.ultimateSnap(opts);
+    }
+  },
+
   // ═══════════════════════════════════════════════════════════════════════════
   // 4. VFX & RENDER TRAITS
   // ═══════════════════════════════════════════════════════════════════════════
@@ -625,24 +833,61 @@ export const Trait = {
     trail(opts: {
       tex: string;
       vx?: number;
+      vxRange?: number;
       vy?: number;
+      life?: number;
       dragX?: number;
       dragY?: number;
       swirl?: boolean;
+      interval?: number;
+      count?: number;
     }): TraitFn {
       return tagTrait(`vfx.trail(${opts.tex})`, (e, a) => {
+        if (opts.interval && (e.step || 0) % opts.interval !== 0) return;
         const tex = resolveEntityTex(e, opts.tex);
         if (!tex) return;
         const p = a.getPixelCoords(e.curX ?? e.x, e.curY ?? e.y);
-        let vx = opts.vx ?? 0;
-        let vy = opts.vy ?? 0;
-        if (opts.swirl) {
-          vx += FastMath.sin(e.l) * 2;
-          vy += FastMath.cos(e.l) * 2;
-        }
+        const count = opts.count ?? 1;
         const dragX = opts.dragX ?? CFG.PHYSICS.DRAG_X;
         const dragY = opts.dragY ?? CFG.PHYSICS.DRAG_Y;
-        a.fxPool.spawnPhysics(tex, p.px, p.py, vx, vy, 10, dragX, dragY, true);
+        const life = opts.life ?? 10;
+
+        for (let i = 0; i < count; i++) {
+          let vx =
+            opts.vx ??
+            (opts.vxRange ? FastMath.randRange(-opts.vxRange, opts.vxRange) : 0);
+          let vy = opts.vy ?? 0;
+          if (opts.swirl) {
+            vx += FastMath.sin(e.l + i) * 2;
+            vy += FastMath.cos(e.l + i) * 2;
+          }
+          a.fxPool.spawnPhysics(tex, p.px, p.py, vx, vy, life, dragX, dragY, true);
+        }
+      });
+    },
+
+    shockwaveOnStart(opts: {
+      color: number;
+      radius?: number;
+      width?: number;
+      shake?: number;
+      flash?: number;
+      sound?: string;
+    }): TraitFn {
+      return tagTrait('vfx.shockwaveOnStart', (e, a) => {
+        if (e.state._swFired) return;
+        e.state._swFired = true;
+        if (opts.sound) AudioSys.play(opts.sound);
+        if (opts.shake) a.shake = Math.max(a.shake, opts.shake);
+        if (opts.flash) a.triggerFlash(opts.flash);
+        const p = a.getPixelCoords(e.x, e.y);
+        a.fxPool.spawnShockwave(
+          p.px,
+          p.py,
+          opts.color,
+          opts.radius ?? 60,
+          opts.width ?? 4
+        );
       });
     }
   },
@@ -956,6 +1201,8 @@ export const Archetype = {
     tx: number;
     ty: number;
     life?: number;
+    duration?: number;
+    arcHeight?: number;
     trailTex?: string;
     trailVy?: number;
     trailDragX?: number;
@@ -963,14 +1210,15 @@ export const Archetype = {
     trailSwirl?: boolean;
     shake?: number;
     flash?: number;
+    sound?: string;
     expSound?: string;
     shockRad?: number;
     spawnOnDeath?: BlueprintOrPayload[];
   }): EntityBlueprint {
     const bp = Blueprint.create()
       .target(opts.tx, opts.ty)
-      .life(opts.life ?? 30)
-      .use(Trait.move.toTarget());
+      .life(opts.duration ?? opts.life ?? 30)
+      .use(Trait.move.toTarget({ arcHeight: opts.arcHeight }));
 
     if (opts.trailTex) {
       bp.use(
@@ -992,12 +1240,44 @@ export const Archetype = {
         color: opts.color,
         shake: opts.shake ?? 10,
         flash: opts.flash,
-        sound: opts.expSound ?? 'explosion',
+        sound: opts.sound ?? opts.expSound ?? 'explosion',
         shockRad: opts.shockRad ?? 90,
         spawnOnDeath: opts.spawnOnDeath
       })
     );
     return bp;
+  },
+
+  mortarBomb(opts: {
+    tx: number;
+    ty: number;
+    dmg: number;
+    radius?: number;
+    duration?: number;
+    life?: number;
+    arcHeight?: number;
+    color: number;
+    trailTex?: string;
+    sound?: string;
+    expSound?: string;
+    shake?: number;
+    shockRad?: number;
+    spawnOnDeath?: BlueprintOrPayload[];
+  }): EntityBlueprint {
+    return Archetype.projectileTargeted({
+      tx: opts.tx,
+      ty: opts.ty,
+      dmg: opts.dmg,
+      radius: opts.radius ?? 1,
+      duration: opts.duration ?? opts.life ?? 18,
+      arcHeight: opts.arcHeight ?? 1.2,
+      color: opts.color,
+      trailTex: opts.trailTex,
+      sound: opts.sound ?? opts.expSound ?? 'explosion',
+      shake: opts.shake ?? 6,
+      shockRad: opts.shockRad ?? 70,
+      spawnOnDeath: opts.spawnOnDeath
+    });
   },
 
   pullToward(opts: {
@@ -1096,3 +1376,4 @@ export const Archetype = {
       .use(Trait.damage.ultimateSnap(opts));
   }
 };
+

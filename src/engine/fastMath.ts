@@ -26,6 +26,20 @@ export const FastMath = {
     return min + this.rand() * (max - min);
   },
 
+  randInt(min: number, max: number): number {
+    const lo = Math.ceil(Math.min(min, max));
+    const hi = Math.floor(Math.max(min, max));
+    return Math.floor(lo + this.rand() * (hi - lo + 1));
+  },
+
+  clamp(val: number, min: number, max: number): number {
+    return val < min ? min : val > max ? max : val;
+  },
+
+  lerp(a: number, b: number, t: number): number {
+    return a + (b - a) * t;
+  },
+
   sin(rad: number): number {
     return (
       this.sinLUT[((rad > 0 ? rad : -rad) * 162.97466) & 1023] *
