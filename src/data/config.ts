@@ -293,6 +293,7 @@ export function computeArenaDimensions(
 }
 
 const LAYOUT_STORAGE_KEY = 'md_arena_layout_v1';
+let _saveTimer: ReturnType<typeof setTimeout> | null = null;
 
 function mergeOrientationConfig(
   defaults: OrientationLayoutConfig,
@@ -315,6 +316,170 @@ function mergeOrientationConfig(
       ...(saved.MINIT_CARD || {})
     }
   };
+}
+
+export type SmartLayoutPresetId = 'auto_fit' | 'max_arena' | 'cinematic' | 'compact';
+
+/**
+ * Generates a finely tuned OrientationLayoutConfig tailored to a target screen resolution (vw × vh).
+ */
+export function buildSmartLayoutForResolution(
+  vw: number,
+  vh: number,
+  mode: 'PORTRAIT' | 'LANDSCAPE',
+  preset: SmartLayoutPresetId
+): OrientationLayoutConfig {
+  const base = cloneLayoutConfig(
+    mode === 'PORTRAIT' ? DEFAULT_PORTRAIT_LAYOUT : DEFAULT_LANDSCAPE_LAYOUT
+  );
+
+  // Use smooth 0.01 scale steps so resolution presets fit any screen smoothly
+  base.SCALE_STEP = 0.01;
+  base.FIXED_SCALE = 0;
+
+  if (mode === 'PORTRAIT') {
+    const isSmallPhone = vw <= 375 || vh <= 680;
+    const isTablet = vw >= 600;
+    const aspect = vh / Math.max(1, vw); // e.g. ~2.16 on tall modern phones, ~1.33 on tablets
+
+    const padX = preset === 'max_arena' ? 4 : isTablet ? 20 : 8;
+    const padY = preset === 'max_arena' ? 6 : isTablet ? 20 : 10;
+    const gap = preset === 'max_arena' ? 6 : isTablet ? 20 : isSmallPhone ? 6 : 10;
+
+    // Calculate how much vertical space is left above/below the arenas
+    const availArenaW = Math.max(80, Math.floor((vw - padX * 2 - gap - 8) / 2));
+    const estArenaH = Math.round((availArenaW / 240) * 320);
+    const leftoverV = Math.max(80, vh - estArenaH - padY * 2);
+
+    base.PADDING_X = padX;
+    base.PADDING_Y = padY;
+    base.ARENA_GAP = gap;
+    base.RESERVE_WIDTH = preset === 'max_arena' ? 4 : isTablet ? 24 : 10;
+    base.RESERVE_HEIGHT =
+      preset === 'max_arena'
+        ? Math.min(130, Math.round(leftoverV * 0.55))
+        : preset === 'compact'
+        ? Math.min(160, Math.round(leftoverV * 0.65))
+        : Math.min(220, Math.max(120, Math.round(leftoverV * 0.72)));
+
+    base.SCALE_MULTIPLIER =
+      preset === 'max_arena'
+        ? 1.04
+        : preset === 'compact'
+        ? 0.92
+        : preset === 'cinematic'
+        ? 0.96
+        : 1.0;
+
+    base.OFFSET_X = 0;
+    base.OFFSET_Y = aspect > 1.9 ? Math.round((vh - estArenaH) * -0.02) : 0;
+
+    base.TIMER_HUD = {
+      OFFSET_Y: aspect > 1.95 ? Math.round(leftoverV * 0.14) : 12,
+      TITLE_FONT_SIZE: isTablet ? 16 : isSmallPhone ? 10 : 12,
+      TIMER_FONT_SIZE: isTablet ? 30 : isSmallPhone ? 20 : 24
+    };
+
+    base.TELEMETRY_BAR = {
+      SHOW: true,
+      OFFSET_Y: 0,
+      FONT_SIZE: isTablet ? 12 : isSmallPhone ? 9 : 10,
+      ICON_SIZE: isTablet ? 14 : 11,
+      PADDING_X: isTablet ? 10 : 6,
+      PADDING_Y: isTablet ? 6 : 4,
+      COMPACT_WIDTH_THRESHOLD: 195
+    };
+
+    base.MINIT_CARD = {
+      SHOW: true,
+      WIDTH_RATIO: 1.0,
+      MARGIN_TOP: preset === 'max_arena' ? 4 : 8,
+      OFFSET_X: 0,
+      OFFSET_Y: 0,
+      PADDING: isTablet ? 10 : isSmallPhone ? 6 : 8,
+      ACCENT_BAR_HEIGHT: 2,
+      ICON_BOX_SIZE: isTablet ? 34 : isSmallPhone ? 22 : 26,
+      ICON_SPRITE_SIZE: isTablet ? 26 : isSmallPhone ? 16 : 20,
+      NAME_FONT_SIZE: isTablet ? 12 : isSmallPhone ? 9 : 10,
+      DESC_FONT_SIZE: isTablet ? 12 : isSmallPhone ? 9 : 10,
+      DESC_MAX_LINES: preset === 'compact' ? 2 : 3
+    };
+  } else {
+    // LANDSCAPE
+    const isShortMobileLand = vh <= 450;
+    const isLargeDesktop = vw >= 1440 && vh >= 800;
+
+    base.PADDING_X = preset === 'max_arena' ? 10 : isShortMobileLand ? 12 : 24;
+    base.PADDING_Y = preset === 'max_arena' ? 6 : isShortMobileLand ? 6 : 14;
+    base.ARENA_GAP =
+      preset === 'max_arena'
+        ? 14
+        : preset === 'cinematic'
+        ? 36
+        : isShortMobileLand
+        ? 14
+        : 24;
+
+    base.RESERVE_WIDTH =
+      preset === 'max_arena' ? 20 : isShortMobileLand ? 28 : 56;
+    base.RESERVE_HEIGHT =
+      preset === 'max_arena'
+        ? isShortMobileLand
+          ? 90
+          : 145
+        : preset === 'compact'
+        ? isShortMobileLand
+          ? 105
+          : 165
+        : isShortMobileLand
+        ? 115
+        : 185;
+
+    base.SCALE_MULTIPLIER =
+      preset === 'max_arena'
+        ? 1.05
+        : preset === 'compact'
+        ? 0.9
+        : preset === 'cinematic'
+        ? 0.95
+        : 1.0;
+
+    base.OFFSET_X = 0;
+    base.OFFSET_Y = 0;
+
+    base.TIMER_HUD = {
+      OFFSET_Y: isShortMobileLand ? 2 : 6,
+      TITLE_FONT_SIZE: isShortMobileLand ? 10 : isLargeDesktop ? 15 : 13,
+      TIMER_FONT_SIZE: isShortMobileLand ? 18 : isLargeDesktop ? 32 : 26
+    };
+
+    base.TELEMETRY_BAR = {
+      SHOW: true,
+      OFFSET_Y: 0,
+      FONT_SIZE: isShortMobileLand ? 9 : 11,
+      ICON_SIZE: isShortMobileLand ? 10 : 12,
+      PADDING_X: isShortMobileLand ? 6 : 10,
+      PADDING_Y: isShortMobileLand ? 3 : 5,
+      COMPACT_WIDTH_THRESHOLD: 185
+    };
+
+    base.MINIT_CARD = {
+      SHOW: !(isShortMobileLand && preset === 'max_arena'),
+      WIDTH_RATIO: 1.0,
+      MARGIN_TOP: isShortMobileLand ? 4 : 8,
+      OFFSET_X: 0,
+      OFFSET_Y: 0,
+      PADDING: isShortMobileLand ? 5 : 10,
+      ACCENT_BAR_HEIGHT: 2,
+      ICON_BOX_SIZE: isShortMobileLand ? 22 : 34,
+      ICON_SPRITE_SIZE: isShortMobileLand ? 16 : 26,
+      NAME_FONT_SIZE: isShortMobileLand ? 9 : 11,
+      DESC_FONT_SIZE: isShortMobileLand ? 9 : 11,
+      DESC_MAX_LINES: isShortMobileLand ? 1 : 2
+    };
+  }
+
+  return base;
 }
 
 export const LayoutConfigService = {
@@ -344,17 +509,20 @@ export const LayoutConfigService = {
   save(portrait: OrientationLayoutConfig, landscape: OrientationLayoutConfig): void {
     CFG.LAYOUT.PORTRAIT = cloneLayoutConfig(portrait);
     CFG.LAYOUT.LANDSCAPE = cloneLayoutConfig(landscape);
-    try {
-      localStorage.setItem(
-        LAYOUT_STORAGE_KEY,
-        JSON.stringify({
-          portrait: CFG.LAYOUT.PORTRAIT,
-          landscape: CFG.LAYOUT.LANDSCAPE
-        })
-      );
-    } catch {
-      // Ignore storage quota errors
-    }
+    if (_saveTimer) clearTimeout(_saveTimer);
+    _saveTimer = setTimeout(() => {
+      try {
+        localStorage.setItem(
+          LAYOUT_STORAGE_KEY,
+          JSON.stringify({
+            portrait: CFG.LAYOUT.PORTRAIT,
+            landscape: CFG.LAYOUT.LANDSCAPE
+          })
+        );
+      } catch {
+        // Ignore storage quota errors
+      }
+    }, 100);
   },
 
   resetOrientation(mode: 'PORTRAIT' | 'LANDSCAPE'): {
@@ -385,4 +553,5 @@ export const LayoutConfigService = {
 if (typeof window !== 'undefined') {
   LayoutConfigService.load();
 }
+
 
