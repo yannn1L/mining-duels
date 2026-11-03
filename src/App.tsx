@@ -25,9 +25,17 @@ import {
   FileCode2,
   CheckCircle2,
   AlertTriangle,
-  X
+  X,
+  Sliders
 } from 'lucide-react';
-import { CFG, OrientationLayoutConfig, PALETTE, numToHex } from './data/config';
+import {
+  CFG,
+  OrientationLayoutConfig,
+  PALETTE,
+  computeArenaDimensions,
+  numToHex
+} from './data/config';
+import { ArenaLayoutTweaker } from './components/ArenaLayoutTweaker';
 import { MINIT_DB, MINIT_LIST } from './data/minits';
 import { AssetBaker } from './engine/assetBaker';
 import { AudioSys, SettingsService } from './engine/audio';
@@ -87,6 +95,7 @@ export default function App() {
 
   const [booted, setBooted] = useState(false);
   const [screen, setScreen] = useState<GameScreen>('TITLE_MENU');
+  const [editorView, setEditorView] = useState<'ROSTER' | 'LAYOUT'>('ROSTER');
   const [selectedMinits, setSelectedMinits] = useState<string[]>(['laser', 'absorb']);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settings, setSettings] = useState<GameSettings>(() => SettingsService.load());
@@ -195,49 +204,15 @@ export default function App() {
     const vw = window.innerWidth;
     const vh = window.innerHeight;
     const { isPortrait, layout } = getActiveLayout(vw, vh);
+    const { w, h, scale: snappedScale } = computeArenaDimensions(vw, vh, layout);
 
-    const baseW = CFG.GRID.COLS * CFG.GRID.TS; // 240
-    const baseH = CFG.GRID.ROWS * CFG.GRID.TS; // 320
-
-    let snappedScale: number;
-
-    if (layout.FIXED_SCALE > 0) {
-      snappedScale = layout.FIXED_SCALE;
-    } else {
-      const totalHorizReserve =
-        layout.RESERVE_WIDTH + layout.PADDING_X * 2 + layout.ARENA_GAP;
-      const maxAvailW = Math.max(80, Math.floor((vw - totalHorizReserve) / 2));
-      const maxAvailH = Math.max(
-        100,
-        vh - layout.RESERVE_HEIGHT - layout.PADDING_Y * 2
-      );
-
-      const rawScaleW = maxAvailW / baseW;
-      const rawScaleH = maxAvailH / baseH;
-      const fittedScale = Math.min(rawScaleW, rawScaleH) * layout.SCALE_MULTIPLIER;
-      const clampedScale = Math.max(
-        layout.MIN_SCALE,
-        Math.min(layout.MAX_SCALE, fittedScale)
-      );
-
-      const step = layout.SCALE_STEP > 0 ? layout.SCALE_STEP : 0.0625;
-      snappedScale = Math.max(
-        layout.MIN_SCALE,
-        Math.floor(clampedScale / step) * step
-      );
-    }
-
-    const w = Math.round(baseW * snappedScale);
-    const h = Math.round(baseH * snappedScale);
-
-    setArenaLayoutState((prev) =>
-      prev.w === w &&
-      prev.h === h &&
-      prev.scale === snappedScale &&
-      prev.isPortrait === isPortrait
-        ? prev
-        : { w, h, scale: snappedScale, isPortrait, layout }
-    );
+    setArenaLayoutState({
+      w,
+      h,
+      scale: snappedScale,
+      isPortrait,
+      layout: { ...layout }
+    });
 
     requestAnimationFrame(() => {
       const arenas = arenasRef.current;
@@ -969,29 +944,67 @@ export default function App() {
       )}
 
       {/* ═══════════════════════════════════════════════════════════════════
-          SCREEN 2: EDITOR / MINIT SELECTION
+          SCREEN 2: EDITOR / MINIT SELECTION & ARENA LAYOUT STUDIO
       ═══════════════════════════════════════════════════════════════════ */}
       {booted && screen === 'EDITOR' && (
-        <div className="relative z-20 flex flex-col w-full h-full max-w-6xl mx-auto px-3 sm:px-8 py-3 sm:py-5">
+        <div className="relative z-20 flex flex-col w-full h-full max-w-6xl mx-auto px-3 sm:px-6 py-3 sm:py-4">
           {/* Top Header */}
-          <div className="flex items-center justify-between gap-2 sm:gap-4 pb-3 border-b border-slate-800/80 shrink-0">
-            <button
-              onClick={() => {
-                AudioSys.play('click');
-                setScreen('TITLE_MENU');
-              }}
-              className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 sm:py-2 text-xs font-medium text-slate-300 bg-slate-900/90 border border-slate-800 hover:border-cyan-400 transition-colors cursor-pointer whitespace-nowrap shrink-0"
-            >
-              <ArrowLeft className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
-              <span className="hidden xs:inline sm:inline">Menu</span>
-            </button>
+          <div className="flex flex-wrap items-center justify-between gap-2 sm:gap-3 pb-2.5 border-b border-slate-800/80 shrink-0">
+            <div className="flex items-center gap-2 shrink-0">
+              <button
+                onClick={() => {
+                  AudioSys.play('click');
+                  setScreen('TITLE_MENU');
+                }}
+                className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 sm:py-2 text-xs font-medium text-slate-300 bg-slate-900/90 border border-slate-800 hover:border-cyan-400 transition-colors cursor-pointer whitespace-nowrap shrink-0"
+              >
+                <ArrowLeft className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                <span className="hidden xs:inline sm:inline">Menu</span>
+              </button>
 
-            <div className="text-center min-w-0">
-              <h2 className="font-pixel text-xs sm:text-lg text-white tracking-wider truncate">
-                SELECT 2 MINITS
+              {/* Editor Mode Switcher: Minit Roster vs Arena Layout Studio */}
+              <div className="flex items-center bg-[#06080f] border border-slate-800 p-0.5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    AudioSys.play('click');
+                    setEditorView('ROSTER');
+                  }}
+                  className={`flex items-center gap-1.5 px-2.5 sm:px-3.5 py-1.5 font-pixel text-[9px] sm:text-[10px] tracking-wider transition-colors cursor-pointer whitespace-nowrap ${
+                    editorView === 'ROSTER'
+                      ? 'bg-cyan-400 text-slate-950'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  <Pickaxe className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+                  <span>MINITS</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    AudioSys.play('click');
+                    setEditorView('LAYOUT');
+                  }}
+                  className={`flex items-center gap-1.5 px-2.5 sm:px-3.5 py-1.5 font-pixel text-[9px] sm:text-[10px] tracking-wider transition-colors cursor-pointer whitespace-nowrap ${
+                    editorView === 'LAYOUT'
+                      ? 'bg-cyan-400 text-slate-950'
+                      : 'text-slate-400 hover:text-white'
+                  }`}
+                >
+                  <Sliders className="w-3 h-3 sm:w-3.5 sm:h-3.5" />
+                  <span>ARENA LAYOUT</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="hidden md:block text-center min-w-0">
+              <h2 className="font-pixel text-xs sm:text-base text-white tracking-wider truncate">
+                {editorView === 'ROSTER' ? 'SELECT 2 MINITS' : 'ARENA LAYOUT STUDIO'}
               </h2>
-              <p className="hidden sm:block text-xs text-slate-400 mt-0.5">
-                Pick P1 and P2 contenders or open Dev Lab to import .ts Minits, Balance & Debug
+              <p className="text-[11px] text-slate-400 mt-0.5 truncate">
+                {editorView === 'ROSTER'
+                  ? 'Pick P1 & P2 contenders or open Dev Lab for .ts Minits & Balance'
+                  : 'Tweak Portrait & Landscape arena geometry with real-time example preview'}
               </p>
             </div>
 
@@ -1031,115 +1044,125 @@ export default function App() {
             </div>
           </div>
 
-          {/* Minit Roster Grid (Built-In + Custom External .ts Minits) */}
-          <div className="flex-1 overflow-y-auto py-3 pr-0.5">
-            <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2.5 sm:gap-3">
-              {MINIT_LIST.map((m) => {
-                const isP1 = selectedMinits[0] === m.id;
-                const isP2 = selectedMinits[1] === m.id;
-                const isSelected = isP1 || isP2;
-                const hex = numToHex(m.color);
-                const previewUrl = MinitPreviewDataUrls[m.id];
+          {/* Main Editor Body: Either Minit Roster Grid OR Arena Layout Tweaker */}
+          {editorView === 'ROSTER' ? (
+            <div className="flex-1 overflow-y-auto py-3 pr-0.5 min-h-0">
+              <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2.5 sm:gap-3">
+                {MINIT_LIST.map((m) => {
+                  const isP1 = selectedMinits[0] === m.id;
+                  const isP2 = selectedMinits[1] === m.id;
+                  const isSelected = isP1 || isP2;
+                  const hex = numToHex(m.color);
+                  const previewUrl = MinitPreviewDataUrls[m.id];
 
-                return (
-                  <div
-                    key={m.id}
-                    onClick={() => handleToggleMinit(m.id)}
-                    role="button"
-                    tabIndex={0}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter' || e.key === ' ') handleToggleMinit(m.id);
-                    }}
-                    className={`group relative flex flex-col justify-between text-left p-2.5 sm:p-3.5 bg-[#0b0d14]/95 border transition-all cursor-pointer ${
-                      isSelected
-                        ? 'border-cyan-400 ring-1 ring-cyan-400/50 bg-[#101522]'
-                        : 'border-slate-800 hover:border-slate-600'
-                    }`}
-                  >
-                    <div>
-                      <div className="flex items-start justify-between gap-1.5 mb-2 w-full">
-                        <div className="flex items-center gap-2 min-w-0">
-                          <div
-                            className="w-9 h-9 sm:w-11 sm:h-11 flex items-center justify-center bg-[#06070b] border border-slate-800 shrink-0"
-                            style={{ borderColor: isSelected ? hex : undefined }}
-                          >
-                            {previewUrl ? (
-                              <img
-                                src={previewUrl}
-                                alt={m.name}
-                                className="w-6 h-6 sm:w-8 sm:h-8 object-contain pixelated-canvas"
-                                referrerPolicy="no-referrer"
-                              />
-                            ) : (
-                              <div
-                                className="w-5 h-5"
-                                style={{ backgroundColor: hex }}
-                              />
-                            )}
-                          </div>
-                          <div className="min-w-0">
-                            <div className="flex items-center gap-1.5">
-                              <span
-                                className="font-pixel text-[10px] sm:text-xs tracking-wide truncate"
-                                style={{ color: hex }}
-                              >
-                                {m.name}
-                              </span>
-                              {m.isCustom && (
-                                <span className="px-1 py-0.2 bg-amber-500/20 border border-amber-400/50 text-amber-300 font-pixel text-[8px] shrink-0">
-                                  .TS
-                                </span>
+                  return (
+                    <div
+                      key={m.id}
+                      onClick={() => handleToggleMinit(m.id)}
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') handleToggleMinit(m.id);
+                      }}
+                      className={`group relative flex flex-col justify-between text-left p-2.5 sm:p-3.5 bg-[#0b0d14]/95 border transition-all cursor-pointer ${
+                        isSelected
+                          ? 'border-cyan-400 ring-1 ring-cyan-400/50 bg-[#101522]'
+                          : 'border-slate-800 hover:border-slate-600'
+                      }`}
+                    >
+                      <div>
+                        <div className="flex items-start justify-between gap-1.5 mb-2 w-full">
+                          <div className="flex items-center gap-2 min-w-0">
+                            <div
+                              className="w-9 h-9 sm:w-11 sm:h-11 flex items-center justify-center bg-[#06070b] border border-slate-800 shrink-0"
+                              style={{ borderColor: isSelected ? hex : undefined }}
+                            >
+                              {previewUrl ? (
+                                <img
+                                  src={previewUrl}
+                                  alt={m.name}
+                                  className="w-6 h-6 sm:w-8 sm:h-8 object-contain pixelated-canvas"
+                                  referrerPolicy="no-referrer"
+                                />
+                              ) : (
+                                <div
+                                  className="w-5 h-5"
+                                  style={{ backgroundColor: hex }}
+                                />
                               )}
                             </div>
-                            <div className="text-[10px] sm:text-[11px] text-slate-400 mt-0.5 truncate">
-                              {m.role || 'Excavator'}
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-1.5">
+                                <span
+                                  className="font-pixel text-[10px] sm:text-xs tracking-wide truncate"
+                                  style={{ color: hex }}
+                                >
+                                  {m.name}
+                                </span>
+                                {m.isCustom && (
+                                  <span className="px-1 py-0.2 bg-amber-500/20 border border-amber-400/50 text-amber-300 font-pixel text-[8px] shrink-0">
+                                    .TS
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-[10px] sm:text-[11px] text-slate-400 mt-0.5 truncate">
+                                {m.role || 'Excavator'}
+                              </div>
                             </div>
                           </div>
+
+                          {(isP1 || isP2) && (
+                            <span className="font-pixel text-[8px] sm:text-[9px] text-cyan-300 shrink-0">
+                              {isP1 && isP2 ? 'P1·P2' : isP1 ? 'P1' : 'P2'}
+                            </span>
+                          )}
                         </div>
 
-                        {(isP1 || isP2) && (
-                          <span className="font-pixel text-[8px] sm:text-[9px] text-cyan-300 shrink-0">
-                            {isP1 && isP2 ? 'P1·P2' : isP1 ? 'P1' : 'P2'}
-                          </span>
-                        )}
+                        <p className="text-[11px] sm:text-xs text-slate-300 leading-relaxed">
+                          {m.desc}
+                        </p>
                       </div>
 
-                      <p className="text-[11px] sm:text-xs text-slate-300 leading-relaxed">
-                        {m.desc}
-                      </p>
+                      {m.isCustom && (
+                        <div className="flex items-center justify-end gap-1.5 mt-2.5 pt-2 border-t border-slate-800/80">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              AudioSys.play('click');
+                              MinitModService.exportMinitTsFile(m.id);
+                            }}
+                            className="flex items-center gap-1 px-2 py-1 text-[9px] font-pixel bg-slate-900 border border-slate-700 text-cyan-300 hover:border-cyan-400 cursor-pointer"
+                            title={`Export ${m.id}.ts`}
+                          >
+                            <Download className="w-3 h-3" />
+                            <span>.TS</span>
+                          </button>
+                          <button
+                            type="button"
+                            onClick={(e) => handleDeleteCustomMinit(m.id, e)}
+                            className="flex items-center gap-1 px-2 py-1 text-[9px] font-pixel bg-rose-950/60 border border-rose-700/70 text-rose-300 hover:border-rose-400 cursor-pointer"
+                            title={`Delete ${m.name}`}
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            <span>DEL</span>
+                          </button>
+                        </div>
+                      )}
                     </div>
-
-                    {m.isCustom && (
-                      <div className="flex items-center justify-end gap-1.5 mt-2.5 pt-2 border-t border-slate-800/80">
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            AudioSys.play('click');
-                            MinitModService.exportMinitTsFile(m.id);
-                          }}
-                          className="flex items-center gap-1 px-2 py-1 text-[9px] font-pixel bg-slate-900 border border-slate-700 text-cyan-300 hover:border-cyan-400 cursor-pointer"
-                          title={`Export ${m.id}.ts`}
-                        >
-                          <Download className="w-3 h-3" />
-                          <span>.TS</span>
-                        </button>
-                        <button
-                          type="button"
-                          onClick={(e) => handleDeleteCustomMinit(m.id, e)}
-                          className="flex items-center gap-1 px-2 py-1 text-[9px] font-pixel bg-rose-950/60 border border-rose-700/70 text-rose-300 hover:border-rose-400 cursor-pointer"
-                          title={`Delete ${m.name}`}
-                        >
-                          <Trash2 className="w-3 h-3" />
-                          <span>DEL</span>
-                        </button>
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
+                  );
+                })}
+              </div>
             </div>
-          </div>
+          ) : (
+            <div className="flex-1 min-h-0 py-2.5 overflow-hidden flex flex-col">
+              <ArenaLayoutTweaker
+                selectedMinits={selectedMinits}
+                isCurrentDevicePortrait={arenaLayoutState.isPortrait}
+                onLayoutUpdated={syncArenaLayout}
+              />
+            </div>
+          )}
 
           {/* Matchup Dock & Start Duel Button */}
           <div className="pt-2.5 border-t border-slate-800/90 flex items-center justify-between gap-2 sm:gap-4 bg-[#080a10]/95 px-3 sm:px-4 py-2.5 sm:py-3 border shrink-0">

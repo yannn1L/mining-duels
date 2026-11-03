@@ -72,6 +72,7 @@ export class VFXPool {
   constructor(c: PIXI.Container) {
     this.c = c;
 
+    // 1. Master Atlas Sprites: Physics particles + Shockwaves batch in 1 draw call
     for (let i = 0; i < CFG.VFX.PHYSICS_LIMIT; i++) {
       const s = new PIXI.Sprite() as PhysicsParticle;
       s.visible = s.active = false;
@@ -81,6 +82,16 @@ export class VFXPool {
       this.phys.push(s);
     }
 
+    for (let i = 0; i < 24; i++) {
+      const sw = new PIXI.Sprite(Textures['fx_ring']) as ShockwaveSprite;
+      sw.anchor.set(0.5);
+      sw.visible = sw.active = false;
+      sw.activeIdx = -1;
+      this.c.addChild(sw);
+      this.sws.push(sw);
+    }
+
+    // 2. Digit Atlas Sprites: All damage popup numbers batch in 1 draw call
     for (let i = 0; i < CFG.VFX.TEXT_LIMIT; i++) {
       const cnt = new PIXI.Container() as DmgTextContainer;
       cnt.visible = cnt.active = false;
@@ -97,21 +108,13 @@ export class VFXPool {
       this.txts.push(cnt);
     }
 
+    // 3. Vector Lasers last so PIXI.Graphics never breaks sprite batches
     for (let i = 0; i < 20; i++) {
       const lz = new PIXI.Graphics() as LaserGfx;
       lz.visible = lz.active = false;
       lz.activeIdx = -1;
       this.c.addChild(lz);
       this.lzs.push(lz);
-    }
-
-    for (let i = 0; i < 24; i++) {
-      const sw = new PIXI.Sprite(Textures['fx_ring']) as ShockwaveSprite;
-      sw.anchor.set(0.5);
-      sw.visible = sw.active = false;
-      sw.activeIdx = -1;
-      this.c.addChild(sw);
-      this.sws.push(sw);
     }
   }
 
@@ -153,8 +156,8 @@ export class VFXPool {
     }
     if (l <= 0) return null;
 
-    // Dynamic throttling for ambient/secondary particles when frame rate dips or pool saturates
-    if (this.lod < 0.96 && (t === 'fx_dust' || l > 6)) {
+    // Only throttle ambient rock dust when pool saturates above 85%
+    if (this.lod < 0.96 && t === 'fx_dust') {
       if (FastMath.rand() > this.lod) return null;
     }
 
@@ -244,6 +247,10 @@ export class VFXPool {
     z.active = z.visible = true;
     z.alpha = 1;
     z.jagged = Boolean(jagged);
+    if (!z.jagged) {
+      // Tessellate static straight laser geometry once on spawn instead of every frame
+      z.clear().lineStyle(z.w, z.color, 1).moveTo(z.sx, z.sy).lineTo(z.ex, z.ey);
+    }
     if (z.activeIdx === -1) {
       z.activeIdx = this.activeLzs.length;
       this.activeLzs.push(z);
@@ -370,20 +377,23 @@ export class VFXPool {
         z.activeIdx = -1;
         continue;
       }
-      z.clear().lineStyle(z.w, z.color, z.life / z.maxL);
-      z.moveTo(z.sx, z.sy);
-      for (let j = 1; j <= 4; j++) {
-        let tx = z.sx + (z.ex - z.sx) * (j / 4);
-        let ty = z.sy + (z.ey - z.sy) * (j / 4);
-        if (z.jagged) {
+      if (!z.jagged) {
+        z.alpha = z.life / z.maxL;
+      } else {
+        z.alpha = 1;
+        z.clear().lineStyle(z.w, z.color, z.life / z.maxL);
+        z.moveTo(z.sx, z.sy);
+        for (let j = 1; j <= 4; j++) {
+          let tx = z.sx + (z.ex - z.sx) * (j / 4);
+          let ty = z.sy + (z.ey - z.sy) * (j / 4);
           tx += FastMath.randRange(-15, 15);
           ty += FastMath.randRange(-5, 5);
+          if (j === 4) {
+            tx = z.ex;
+            ty = z.ey;
+          }
+          z.lineTo(tx, ty);
         }
-        if (j === 4) {
-          tx = z.ex;
-          ty = z.ey;
-        }
-        z.lineTo(tx, ty);
       }
     }
 

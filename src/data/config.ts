@@ -227,3 +227,162 @@ export const PALETTE = {
 export function numToHex(color: number): string {
   return '#' + (color & 0xffffff).toString(16).padStart(6, '0');
 }
+
+export function cloneLayoutConfig(cfg: OrientationLayoutConfig): OrientationLayoutConfig {
+  return {
+    ...cfg,
+    TIMER_HUD: { ...cfg.TIMER_HUD },
+    TELEMETRY_BAR: { ...cfg.TELEMETRY_BAR },
+    MINIT_CARD: { ...cfg.MINIT_CARD }
+  };
+}
+
+export const DEFAULT_PORTRAIT_LAYOUT: OrientationLayoutConfig = cloneLayoutConfig(
+  CFG.LAYOUT.PORTRAIT
+);
+
+export const DEFAULT_LANDSCAPE_LAYOUT: OrientationLayoutConfig = cloneLayoutConfig(
+  CFG.LAYOUT.LANDSCAPE
+);
+
+export function computeArenaDimensions(
+  vw: number,
+  vh: number,
+  layout: OrientationLayoutConfig
+): {
+  w: number;
+  h: number;
+  scale: number;
+} {
+  const baseW = CFG.GRID.COLS * CFG.GRID.TS; // 240
+  const baseH = CFG.GRID.ROWS * CFG.GRID.TS; // 320
+
+  let snappedScale: number;
+
+  if (layout.FIXED_SCALE > 0) {
+    snappedScale = layout.FIXED_SCALE;
+  } else {
+    const totalHorizReserve =
+      layout.RESERVE_WIDTH + layout.PADDING_X * 2 + layout.ARENA_GAP;
+    const maxAvailW = Math.max(80, Math.floor((vw - totalHorizReserve) / 2));
+    const maxAvailH = Math.max(
+      100,
+      vh - layout.RESERVE_HEIGHT - layout.PADDING_Y * 2
+    );
+
+    const rawScaleW = maxAvailW / baseW;
+    const rawScaleH = maxAvailH / baseH;
+    const fittedScale = Math.min(rawScaleW, rawScaleH) * layout.SCALE_MULTIPLIER;
+    const clampedScale = Math.max(
+      layout.MIN_SCALE,
+      Math.min(layout.MAX_SCALE, fittedScale)
+    );
+
+    const step = layout.SCALE_STEP > 0 ? layout.SCALE_STEP : 0.0625;
+    snappedScale = Math.max(
+      layout.MIN_SCALE,
+      Math.floor(clampedScale / step) * step
+    );
+  }
+
+  return {
+    w: Math.round(baseW * snappedScale),
+    h: Math.round(baseH * snappedScale),
+    scale: snappedScale
+  };
+}
+
+const LAYOUT_STORAGE_KEY = 'md_arena_layout_v1';
+
+function mergeOrientationConfig(
+  defaults: OrientationLayoutConfig,
+  saved?: Partial<OrientationLayoutConfig>
+): OrientationLayoutConfig {
+  if (!saved || typeof saved !== 'object') return cloneLayoutConfig(defaults);
+  return {
+    ...defaults,
+    ...saved,
+    TIMER_HUD: {
+      ...defaults.TIMER_HUD,
+      ...(saved.TIMER_HUD || {})
+    },
+    TELEMETRY_BAR: {
+      ...defaults.TELEMETRY_BAR,
+      ...(saved.TELEMETRY_BAR || {})
+    },
+    MINIT_CARD: {
+      ...defaults.MINIT_CARD,
+      ...(saved.MINIT_CARD || {})
+    }
+  };
+}
+
+export const LayoutConfigService = {
+  load(): { portrait: OrientationLayoutConfig; landscape: OrientationLayoutConfig } {
+    try {
+      const raw = localStorage.getItem(LAYOUT_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        CFG.LAYOUT.PORTRAIT = mergeOrientationConfig(
+          DEFAULT_PORTRAIT_LAYOUT,
+          parsed.portrait
+        );
+        CFG.LAYOUT.LANDSCAPE = mergeOrientationConfig(
+          DEFAULT_LANDSCAPE_LAYOUT,
+          parsed.landscape
+        );
+      }
+    } catch {
+      // Ignore storage read errors
+    }
+    return {
+      portrait: cloneLayoutConfig(CFG.LAYOUT.PORTRAIT),
+      landscape: cloneLayoutConfig(CFG.LAYOUT.LANDSCAPE)
+    };
+  },
+
+  save(portrait: OrientationLayoutConfig, landscape: OrientationLayoutConfig): void {
+    CFG.LAYOUT.PORTRAIT = cloneLayoutConfig(portrait);
+    CFG.LAYOUT.LANDSCAPE = cloneLayoutConfig(landscape);
+    try {
+      localStorage.setItem(
+        LAYOUT_STORAGE_KEY,
+        JSON.stringify({
+          portrait: CFG.LAYOUT.PORTRAIT,
+          landscape: CFG.LAYOUT.LANDSCAPE
+        })
+      );
+    } catch {
+      // Ignore storage quota errors
+    }
+  },
+
+  resetOrientation(mode: 'PORTRAIT' | 'LANDSCAPE'): {
+    portrait: OrientationLayoutConfig;
+    landscape: OrientationLayoutConfig;
+  } {
+    if (mode === 'PORTRAIT') {
+      CFG.LAYOUT.PORTRAIT = cloneLayoutConfig(DEFAULT_PORTRAIT_LAYOUT);
+    } else {
+      CFG.LAYOUT.LANDSCAPE = cloneLayoutConfig(DEFAULT_LANDSCAPE_LAYOUT);
+    }
+    this.save(CFG.LAYOUT.PORTRAIT, CFG.LAYOUT.LANDSCAPE);
+    return {
+      portrait: cloneLayoutConfig(CFG.LAYOUT.PORTRAIT),
+      landscape: cloneLayoutConfig(CFG.LAYOUT.LANDSCAPE)
+    };
+  },
+
+  exportTsSnippet(
+    portrait: OrientationLayoutConfig,
+    landscape: OrientationLayoutConfig
+  ): string {
+    return `PORTRAIT: ${JSON.stringify(portrait, null, 2)} as OrientationLayoutConfig,\n\nLANDSCAPE: ${JSON.stringify(landscape, null, 2)} as OrientationLayoutConfig`;
+  }
+};
+
+// Initialize saved layout overrides on module load
+if (typeof window !== 'undefined') {
+  LayoutConfigService.load();
+}
+

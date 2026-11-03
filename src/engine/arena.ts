@@ -21,7 +21,6 @@ import { Textures } from './textures';
 import { VFXPool } from './vfxPool';
 
 interface ViewportBlock {
-  c: PIXI.Container;
   b: PIXI.Sprite;
   cr: PIXI.Sprite;
   lastGy: number;
@@ -98,6 +97,7 @@ export class Arena extends PIXI.Container implements IArena {
   private lastCYInt = -1;
   private hasDirtyBlocks = true;
   private _debugWasDirty = false;
+  private _statsOut = { d: 0, maxDp: 0 };
 
   private ents: Entity[] = [];
   private activeEnts = new SparseSet<Entity>();
@@ -210,11 +210,14 @@ export class Arena extends PIXI.Container implements IArena {
   public get stats() {
     let totalD = 0;
     let maxDp = 0;
-    for (const s of this.slots) {
+    for (let i = 0, len = this.slots.length; i < len; i++) {
+      const s = this.slots[i];
       totalD += s.stats.d;
       if (s.stats.maxDp > maxDp) maxDp = s.stats.maxDp;
     }
-    return { d: totalD, maxDp };
+    this._statsOut.d = totalD;
+    this._statsOut.maxDp = maxDp;
+    return this._statsOut;
   }
 
   public getOpponentSlot(selfSlot: IMinitSlot): IMinitSlot | null {
@@ -229,19 +232,26 @@ export class Arena extends PIXI.Container implements IArena {
 
   private _initViewportPool(): void {
     const TS = this.ts;
+    const cracksToAdd: PIXI.Sprite[] = [];
     for (let y = 0; y < this.RENDER_ROWS; y++) {
       for (let x = 0; x < this.cols; x++) {
-        const c = new PIXI.Container();
-        c.position.set(x * TS, y * TS);
+        const px = x * TS;
+        const py = y * TS;
 
         const b = new PIXI.Sprite(AssetBaker.ROCK_TEXTURES[0]);
+        b.position.set(px, py);
+
         const cr = new PIXI.Sprite(Textures['crack_1']);
+        cr.position.set(px, py);
         cr.visible = false;
 
-        c.addChild(b, cr);
-        this.sprLayer.addChild(c);
-        this.vpBlocks.push({ c, b, cr, lastGy: -1, dirty: true });
+        this.sprLayer.addChild(b);
+        cracksToAdd.push(cr);
+        this.vpBlocks.push({ b, cr, lastGy: -1, dirty: true });
       }
+    }
+    for (let i = 0; i < cracksToAdd.length; i++) {
+      this.sprLayer.addChild(cracksToAdd[i]);
     }
   }
 
@@ -806,14 +816,12 @@ export class Arena extends PIXI.Container implements IArena {
   public updateVisuals(timeScale: number): void {
     if (this.headless) return;
 
-    // Adaptive VFX LOD Throttling based on rolling frame time and active particle saturation
+    // Keep VFX at 100% fidelity unless particle pool saturates above 85%
     this.smoothDt = this.smoothDt * 0.9 + timeScale * 0.1;
     const pRatio = this.fxPool.activeCount / CFG.VFX.PHYSICS_LIMIT;
-    const dtFactor =
-      this.smoothDt > 1.16 ? Math.max(0.25, 1.0 - (this.smoothDt - 1.12) * 0.85) : 1.0;
     const poolFactor =
-      pRatio > 0.5 ? Math.max(0.25, 1.0 - (pRatio - 0.5) * 1.4) : 1.0;
-    this.vfxLod = this.baseVfxLod * Math.min(dtFactor, poolFactor);
+      pRatio > 0.85 ? Math.max(0.5, 1.0 - (pRatio - 0.85) * 3.0) : 1.0;
+    this.vfxLod = this.baseVfxLod * poolFactor;
     this.fxPool.lod = this.vfxLod;
 
     for (const slot of this.slots) {
@@ -859,7 +867,8 @@ export class Arena extends PIXI.Container implements IArena {
 
           if (vpb.lastGy !== gy) {
             vpb.lastGy = gy;
-            vpb.c.y = worldYPos;
+            vpb.b.y = worldYPos;
+            vpb.cr.y = worldYPos;
             vpb.dirty = true;
           }
 
@@ -867,11 +876,11 @@ export class Arena extends PIXI.Container implements IArena {
             vpb.dirty = false;
             const hp = this.getHP(vx, gy);
             if (hp <= 0 || hp === 9999) {
-              vpb.c.visible = false;
+              vpb.b.visible = false;
+              vpb.cr.visible = false;
             } else {
-              vpb.c.visible = true;
+              vpb.b.visible = true;
               vpb.b.texture = texRock;
-              vpb.b.alpha = 1.0;
               const pct = hp / maxHp;
               if (pct > 0.9) {
                 vpb.cr.visible = false;

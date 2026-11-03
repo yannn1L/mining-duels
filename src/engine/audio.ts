@@ -34,6 +34,12 @@ export const SettingsService = {
     return { ...loaded };
   },
 
+  /** Zero-allocation read for hot audio playback paths */
+  get(): Readonly<GameSettings> {
+    if (!this._cache) this.load();
+    return this._cache!;
+  },
+
   save(settings: GameSettings): void {
     this._cache = { ...settings };
     try {
@@ -47,6 +53,7 @@ export const SettingsService = {
 
 class AudioSystem {
   private ctx: AudioContext | null = null;
+  private noiseBuffer: AudioBuffer | null = null;
   private lastPlay: Record<string, number> = {};
   public masterGain: GainNode | null = null;
   private compressor: DynamicsCompressorNode | null = null;
@@ -61,6 +68,18 @@ class AudioSystem {
     return this.ctx;
   }
 
+  private getNoiseBuffer(ctx: AudioContext): AudioBuffer {
+    if (!this.noiseBuffer || this.noiseBuffer.sampleRate !== ctx.sampleRate) {
+      const bufSize = Math.max(1, Math.floor(ctx.sampleRate * 2.0));
+      this.noiseBuffer = ctx.createBuffer(1, bufSize, ctx.sampleRate);
+      const data = this.noiseBuffer.getChannelData(0);
+      for (let i = 0; i < bufSize; i++) {
+        data[i] = FastMath.rand() * 2 - 1;
+      }
+    }
+    return this.noiseBuffer;
+  }
+
   public init(): void {
     if (this.mutedForHeadless) return;
     const ctx = this.ensureContext();
@@ -70,7 +89,7 @@ class AudioSystem {
     }
     if (!this.masterGain) {
       this.masterGain = ctx.createGain();
-      const s = SettingsService.load();
+      const s = SettingsService.get();
       this.masterGain.gain.value = s.sfx ? CFG.AUDIO.MASTER_GAIN * s.sfxVol : 0;
 
       this.compressor = ctx.createDynamicsCompressor();
@@ -79,6 +98,7 @@ class AudioSystem {
 
       this.masterGain.connect(this.compressor);
       this.compressor.connect(ctx.destination);
+      this.getNoiseBuffer(ctx);
     }
   }
 
@@ -92,7 +112,7 @@ class AudioSystem {
 
   public play(type: string, volMult = 1): void {
     if (this.mutedForHeadless) return;
-    const s = SettingsService.load();
+    const s = SettingsService.get();
     if (!s.sfx || s.sfxVol <= 0) return;
 
     this.init();
@@ -113,13 +133,8 @@ class AudioSystem {
     const targetVol = Math.max(0.001, baseVol * volMult);
 
     if (p.noise) {
-      const bufSize = Math.max(1, Math.floor(ctx.sampleRate * p.d));
-      const buffer = ctx.createBuffer(1, bufSize, ctx.sampleRate);
-      const data = buffer.getChannelData(0);
-      for (let i = 0; i < bufSize; i++) data[i] = FastMath.rand() * 2 - 1;
-
       const noise = ctx.createBufferSource();
-      noise.buffer = buffer;
+      noise.buffer = this.getNoiseBuffer(ctx);
 
       const filter = ctx.createBiquadFilter();
       filter.type = p.fType || 'lowpass';
@@ -149,8 +164,8 @@ class AudioSystem {
         osc.stop(now + Math.min(0.4, p.d));
       }
 
-      noise.start(now);
-      noise.stop(now + p.d);
+      const maxOffset = Math.max(0, 1.9 - p.d);
+      noise.start(now, FastMath.randRange(0, maxOffset), p.d);
       noise.onended = () => {
         filter.disconnect();
         gain.disconnect();

@@ -27,6 +27,11 @@ export interface LaserState {
   charging: boolean;
   chargeTicks: number;
   chargeRings: number;
+  postFireTick: number;
+  beamStartX: number;
+  beamStartY: number;
+  beamEndX: number;
+  beamEndY: number;
 }
 
 export const laserMinit: MinitDef<LaserConfig, LaserState> = {
@@ -115,14 +120,106 @@ export const laserMinit: MinitDef<LaserConfig, LaserState> = {
     state.charging = false;
     state.chargeTicks = 0;
     state.chargeRings = 0;
+    state.postFireTick = 0;
+    state.beamStartX = 0;
+    state.beamStartY = 0;
+    state.beamEndX = 0;
+    state.beamEndY = 0;
   },
 
   onTick: (ctx) => {
     const { state, arena, slot, config, tex, playSound } = ctx;
+    const el = config.electric;
+
+    // Deterministic tick-driven post-fire beam VFX (replaces browser setTimeout timers)
+    if (state.postFireTick > 0 && !arena.headless) {
+      const tick = state.postFireTick;
+      state.postFireTick = tick >= 12 ? 0 : tick + 1;
+
+      const sx = state.beamStartX;
+      const sy = state.beamStartY;
+      const ex = state.beamEndX;
+      const ey = state.beamEndY;
+
+      // Staggered electric arcs along beam shaft
+      if (tick <= 10) {
+        const t = FastMath.rand();
+        const ax = sx + (ex - sx) * t;
+        const ay = sy + (ey - sy) * t;
+        arena.fxPool.spawnPhysics(
+          tex('electric_arc'),
+          ax + FastMath.randRange(-el.beamArcJitter, el.beamArcJitter),
+          ay,
+          FastMath.randRange(-2, 2),
+          FastMath.randRange(-1, 1),
+          8,
+          0.9,
+          0.9,
+          true
+        );
+      }
+
+      // Impact shockwave, burst & shrapnel at tick 4 (~60ms)
+      if (tick === 4) {
+        arena.fxPool.spawnShockwave(ex, ey, slot.md.color, 80, 5);
+        arena.fxPool.spawnPhysics(tex('impact_burst'), ex, ey, 0, 0, 12, 1, 1, true);
+
+        for (let i = 0; i < el.impactArcCount; i++) {
+          const ang = FastMath.rand() * Math.PI * 2;
+          const rad = FastMath.randRange(10, el.impactArcRange);
+          arena.fxPool.spawnPhysics(
+            tex('electric_arc'),
+            ex + Math.cos(ang) * rad,
+            ey + Math.sin(ang) * rad,
+            Math.cos(ang) * FastMath.randRange(-1, 1),
+            Math.sin(ang) * FastMath.randRange(-1, 1),
+            15,
+            0.9,
+            0.9,
+            true
+          );
+        }
+
+        for (let i = 0; i < config.impactShrapnel; i++) {
+          const ang = FastMath.rand() * Math.PI * 2;
+          arena.fxPool.spawnPhysics(
+            'fx_shrapnel',
+            ex + Math.cos(ang) * 4,
+            ey + Math.sin(ang) * 4,
+            Math.cos(ang) * FastMath.randRange(1, 3),
+            Math.sin(ang) * FastMath.randRange(1, 3),
+            20,
+            0.9,
+            0.9,
+            true
+          );
+        }
+        playSound('crush', 0.5);
+      }
+
+      // Staggered post-smoke along the beam every 2 ticks (~30ms)
+      if (tick % 2 === 0) {
+        const smokeIdx = (tick >> 1) - 1;
+        if (smokeIdx >= 0 && smokeIdx < config.postSmoke) {
+          const smokeY = sy + (smokeIdx / config.postSmoke) * (ey - sy);
+          arena.fxPool.spawnPhysics(
+            tex('post_smoke'),
+            sx + FastMath.randRange(-4, 4),
+            smokeY,
+            FastMath.randRange(-0.5, 0.5),
+            FastMath.randRange(-1, -0.3),
+            25,
+            0.94,
+            0.97,
+            true
+          );
+        }
+      }
+    }
+
     if (!state.charging) return;
 
     const p = arena.getPixelCoords(slot.log.x, slot.log.y);
-    const el = config.electric;
 
     state.chargeTicks++;
     const pulse = 1 + Math.sin(state.chargeTicks * 0.5) * 0.12;
@@ -206,7 +303,6 @@ export const laserMinit: MinitDef<LaserConfig, LaserState> = {
 function fireBeam(ctx: MinitContext<LaserConfig, LaserState>) {
   const { state, arena, slot, config, spawn, tex, playSound } = ctx;
   const log = slot.log;
-  const el = config.electric;
 
   state.charging = false;
   state.chargeTicks = 0;
@@ -263,27 +359,6 @@ function fireBeam(ctx: MinitContext<LaserConfig, LaserState>) {
 
   if (arena.headless) return;
 
-  const arcCount = Math.ceil(config.length * 2 * arena.vfxLod);
-  for (let i = 0; i < arcCount; i++) {
-    const t = FastMath.rand();
-    const ax = p.px + (pEnd.px - p.px) * t;
-    const ay = p.py + (pEnd.py - p.py) * t;
-    setTimeout(() => {
-      if ((arena as any).destroyed || !arena.fxPool) return;
-      arena.fxPool.spawnPhysics(
-        tex('electric_arc'),
-        ax + FastMath.randRange(-el.beamArcJitter, el.beamArcJitter),
-        ay,
-        FastMath.randRange(-2, 2),
-        FastMath.randRange(-1, 1),
-        8,
-        0.9,
-        0.9,
-        true
-      );
-    }, i * 15);
-  }
-
   for (let i = 0; i < 6; i++) {
     const ang = FastMath.rand() * Math.PI * 2;
     arena.fxPool.spawnPhysics(
@@ -299,59 +374,9 @@ function fireBeam(ctx: MinitContext<LaserConfig, LaserState>) {
     );
   }
 
-  setTimeout(() => {
-    if ((arena as any).destroyed || !arena.fxPool) return;
-    arena.fxPool.spawnShockwave(pEnd.px, pEnd.py, slot.md.color, 80, 5);
-    arena.fxPool.spawnPhysics(tex('impact_burst'), pEnd.px, pEnd.py, 0, 0, 12, 1, 1, true);
-
-    for (let i = 0; i < el.impactArcCount; i++) {
-      const ang = FastMath.rand() * Math.PI * 2;
-      const rad = FastMath.randRange(10, el.impactArcRange);
-      arena.fxPool.spawnPhysics(
-        tex('electric_arc'),
-        pEnd.px + Math.cos(ang) * rad,
-        pEnd.py + Math.sin(ang) * rad,
-        Math.cos(ang) * FastMath.randRange(-1, 1),
-        Math.sin(ang) * FastMath.randRange(-1, 1),
-        15,
-        0.9,
-        0.9,
-        true
-      );
-    }
-
-    for (let i = 0; i < config.impactShrapnel; i++) {
-      const ang = FastMath.rand() * Math.PI * 2;
-      arena.fxPool.spawnPhysics(
-        'fx_shrapnel',
-        pEnd.px + Math.cos(ang) * 4,
-        pEnd.py + Math.sin(ang) * 4,
-        Math.cos(ang) * FastMath.randRange(1, 3),
-        Math.sin(ang) * FastMath.randRange(1, 3),
-        20,
-        0.9,
-        0.9,
-        true
-      );
-    }
-    playSound('crush', 0.5);
-  }, 60);
-
-  for (let i = 0; i < config.postSmoke; i++) {
-    const smokeY = p.py + (i / config.postSmoke) * (pEnd.py - p.py);
-    setTimeout(() => {
-      if ((arena as any).destroyed || !arena.fxPool) return;
-      arena.fxPool.spawnPhysics(
-        tex('post_smoke'),
-        p.px + FastMath.randRange(-4, 4),
-        smokeY,
-        FastMath.randRange(-0.5, 0.5),
-        FastMath.randRange(-1, -0.3),
-        25,
-        0.94,
-        0.97,
-        true
-      );
-    }, i * 30);
-  }
+  state.beamStartX = p.px;
+  state.beamStartY = p.py;
+  state.beamEndX = pEnd.px;
+  state.beamEndY = pEnd.py;
+  state.postFireTick = 1;
 }

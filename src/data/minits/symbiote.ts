@@ -14,7 +14,7 @@ export interface SymbioteConfig {
 }
 
 export interface SymbioteState {
-  infested: Map<string, { stacks: number; lastTouch: number }>;
+  infested: Map<number, { x: number; y: number; stacks: number; lastTouch: number }>;
   tentacles: Entity[];
   triggerCounter: number;
 }
@@ -182,7 +182,7 @@ export const symbioteMinit: MinitDef<SymbioteConfig, SymbioteState> = {
   },
 
   onInit: ({ state }) => {
-    state.infested = new Map<string, { stacks: number; lastTouch: number }>();
+    state.infested = new Map<number, { x: number; y: number; stacks: number; lastTouch: number }>();
     state.tentacles = [];
     state.triggerCounter = 0;
   },
@@ -210,11 +210,14 @@ export const symbioteMinit: MinitDef<SymbioteConfig, SymbioteState> = {
     const picks = candidates.slice(0, config.infectPerTrigger);
 
     for (const t of picks) {
-      const key = `${t.x},${t.y}`;
-      const cur = state.infested.get(key) || { stacks: 0, lastTouch: arena.simTicks };
+      const key = t.y * arena.cols + t.x;
+      let cur = state.infested.get(key);
+      if (!cur) {
+        cur = { x: t.x, y: t.y, stacks: 0, lastTouch: arena.simTicks };
+        state.infested.set(key, cur);
+      }
       cur.stacks++;
       cur.lastTouch = arena.simTicks;
-      state.infested.set(key, cur);
 
       arena.dmg(t.x, t.y, config.dmg * dmgMul, false, slot.md.color, slot);
       const p = arena.getPixelCoords(t.x, t.y);
@@ -291,17 +294,25 @@ export const symbioteMinit: MinitDef<SymbioteConfig, SymbioteState> = {
 
   onTick: ({ state, arena, spr, slot, tex }) => {
     if (arena.simTicks % 30 === 0) {
-      const toRemove: string[] = [];
       for (const [key, val] of state.infested.entries()) {
-        const [x, y] = key.split(',').map(Number);
-        const hp = arena.getHP(x, y);
-        if (hp <= 0 || hp === 9999) toRemove.push(key);
-        else if (arena.simTicks - val.lastTouch > 180) toRemove.push(key);
+        const hp = arena.getHP(val.x, val.y);
+        if (hp <= 0 || hp === 9999 || arena.simTicks - val.lastTouch > 180) {
+          state.infested.delete(key);
+        }
       }
-      for (const k of toRemove) state.infested.delete(k);
     }
 
-    state.tentacles = state.tentacles.filter((t) => t.active && !t.dead);
+    if (arena.simTicks % 10 === 0) {
+      let writeIdx = 0;
+      const tents = state.tentacles;
+      for (let i = 0; i < tents.length; i++) {
+        const t = tents[i];
+        if (t && t.active && !t.dead) {
+          tents[writeIdx++] = t;
+        }
+      }
+      tents.length = writeIdx;
+    }
 
     const pulse = 0.5 + Math.sin(arena.simTicks * 0.15) * 0.5;
     slot.animScale.tX = 1 + pulse * 0.1;
@@ -316,9 +327,8 @@ export const symbioteMinit: MinitDef<SymbioteConfig, SymbioteState> = {
     }
 
     if (arena.simTicks % 20 === 0) {
-      for (const [key] of state.infested.entries()) {
-        const [x, y] = key.split(',').map(Number);
-        const p = arena.getPixelCoords(x, y);
+      for (const val of state.infested.values()) {
+        const p = arena.getPixelCoords(val.x, val.y);
         arena.fxPool.spawnPhysics(
           tex('parasite_glow'),
           p.px + FastMath.randRange(-4, 4),
