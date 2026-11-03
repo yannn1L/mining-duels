@@ -26,7 +26,8 @@ import {
   CheckCircle2,
   AlertTriangle,
   X,
-  Sliders
+  Sliders,
+  Sparkles
 } from 'lucide-react';
 import {
   CFG,
@@ -379,7 +380,8 @@ export default function App() {
       const keys = Object.keys(MINIT_DB);
       for (let i = 0; i < 22; i++) {
         const id = keys[(FastMath.rand() * keys.length) | 0];
-        const f = new PIXI.Sprite(Textures[`minit_${id}_base`]) as BgFloater;
+        const tex = Textures[`minit_${id}_base`] || PIXI.Texture.WHITE;
+        const f = new PIXI.Sprite(tex) as BgFloater;
         f.anchor.set(0.5);
         const intScale = 2 + ((FastMath.rand() * 3) | 0);
         f.scale.set(intScale);
@@ -1845,6 +1847,18 @@ export default function App() {
                         >
                           <Download className="w-3.5 h-3.5 text-cyan-400" />
                           <span>DOWNLOAD VORTEX.TS TEMPLATE</span>
+                        </button>
+
+                        <button
+                          onClick={() => {
+                            AudioSys.play('click');
+                            setTsFileName('vortex.ts');
+                            setTsEditorCode(generateStarterTemplateTs('vortex'));
+                          }}
+                          className="flex items-center gap-2 px-3 py-2 bg-cyan-950/60 border border-cyan-600/80 text-cyan-200 font-pixel text-[10px] hover:border-cyan-400 cursor-pointer"
+                        >
+                          <Sparkles className="w-3.5 h-3.5 text-cyan-400" />
+                          <span>LOAD VORTEX (PNG) IN EDITOR</span>
                         </button>
                       </div>
 

@@ -198,7 +198,9 @@ export type TextureDrawer = (g: PIXI.Graphics, color: number) => void;
 
 export interface TextureDataUrlConfig {
   /** Base64 PNG Data URL (e.g. "data:image/png;base64,...") or image path */
-  dataUrl: string;
+  dataUrl?: string;
+  src?: string;
+  url?: string;
   /** Optional target pixel width when baking into the sprite texture */
   width?: number;
   /** Optional target pixel height when baking into the sprite texture */

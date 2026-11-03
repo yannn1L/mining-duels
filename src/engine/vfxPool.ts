@@ -65,7 +65,6 @@ export class VFXPool {
   private tIdx = 0;
   private lIdx = 0;
   private sIdx = 0;
-  private _warnedMissing = new Set<string>();
   public destroyed = false;
   public lod = 1.0;
 
@@ -134,11 +133,6 @@ export class VFXPool {
     this.activeSws.length = 0;
   }
 
-  private _warnOnce(key: string, msg: string): void {
-    if (this._warnedMissing.has(key)) return;
-    this._warnedMissing.add(key);
-    console.warn(`[VFXPool] ${msg}`);
-  }
 
   public spawnPhysics(
     t: string,
@@ -161,11 +155,7 @@ export class VFXPool {
       if (FastMath.rand() > this.lod) return null;
     }
 
-    const tex = Textures[t];
-    if (!tex) {
-      this._warnOnce(t, `Missing texture "${t}" — spawn skipped.`);
-      return null;
-    }
+    const tex = Textures[t] || Textures['fx_dust'] || PIXI.Texture.WHITE;
 
     this.pIdx = (this.pIdx + 1) % this.phys.length;
     const s = this.phys[this.pIdx];

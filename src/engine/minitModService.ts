@@ -15,7 +15,7 @@ import {
   tagTrait
 } from './blueprint';
 import { FastMath } from './fastMath';
-import { Textures, pngTexture } from './textures';
+import { Textures, MinitPreviewDataUrls, pngTexture } from './textures';
 
 const STORAGE_KEY = 'md_custom_minits_v1';
 
@@ -257,6 +257,16 @@ export function evaluateMinitTsModule(
 
   validateMinitDef(candidate, fileName);
   candidate.isCustom = true;
+
+  // Pre-seed MinitPreviewDataUrls immediately so preview is instant even before async baking completes
+  if (candidate.textures && candidate.textures.base) {
+    const b = candidate.textures.base;
+    const url = typeof b === 'string' ? b : (b.dataUrl || b.src || b.url);
+    if (typeof url === 'string' && (url.startsWith('data:') || url.startsWith('http') || url.startsWith('blob:'))) {
+      MinitPreviewDataUrls[candidate.id] = url;
+    }
+  }
+
   return candidate as MinitDef<any, any>;
 }
 
@@ -300,20 +310,64 @@ export function validateMinitDef(def: any, sourceLabel = 'Minit'): void {
 export const MinitModService = {
   getRecords(): CustomMinitRecord[] {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return [];
-      const parsed = JSON.parse(raw);
-      return Array.isArray(parsed) ? parsed : [];
+      const storage = typeof localStorage !== 'undefined' ? localStorage : null;
+      const raw = storage ? storage.getItem(STORAGE_KEY) : null;
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          // Prune any legacy custom records that are now promoted to core built-in Minits (e.g. tecton)
+          const nonCore = parsed.filter((rec) => !CORE_MINIT_IDS.has(rec.id));
+          if (nonCore.length !== parsed.length && storage) {
+            storage.setItem(STORAGE_KEY, JSON.stringify(nonCore));
+          }
+
+          if (nonCore.length > 0) {
+            // If vortex was saved with outdated code, upgrade it to the PNG Data URL version
+            const updated = nonCore.map((rec) => {
+              if (rec.id === 'vortex' && !rec.sourceCode.includes('VORTEX_BASE_PNG')) {
+                return {
+                  ...rec,
+                  sourceCode: generateStarterTemplateTs('vortex')
+                };
+              }
+              return rec;
+            });
+            return updated;
+          }
+        }
+      }
+      // Seed default example Dev Lab custom Minit using PNG Data URLs
+      const defaultVortex: CustomMinitRecord = {
+        id: 'vortex',
+        name: 'VORTEX',
+        fileName: 'vortex.ts',
+        sourceCode: generateStarterTemplateTs('vortex'),
+        createdAt: Date.now()
+      };
+      if (storage) {
+        storage.setItem(STORAGE_KEY, JSON.stringify([defaultVortex]));
+      }
+      return [defaultVortex];
     } catch {
-      return [];
+      return [
+        {
+          id: 'vortex',
+          name: 'VORTEX',
+          fileName: 'vortex.ts',
+          sourceCode: generateStarterTemplateTs('vortex'),
+          createdAt: Date.now()
+        }
+      ];
     }
   },
 
   saveRecords(records: CustomMinitRecord[]): void {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
-    } catch (err) {
-      console.warn('[MinitModService] Failed to save custom minits to localStorage:', err);
+      if (typeof localStorage !== 'undefined') {
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
+      }
+    } catch {
+      // Graceful fallback if storage quota exceeded
     }
   },
 
@@ -325,13 +379,16 @@ export const MinitModService = {
     const records = this.getRecords();
     const validRecords: CustomMinitRecord[] = [];
     for (const rec of records) {
+      if (CORE_MINIT_IDS.has(rec.id)) {
+        continue;
+      }
       try {
         const def = evaluateMinitTsModule(rec.sourceCode, rec.fileName);
         registerMinit(def);
         await AssetBaker.bakeSingleMinit(renderer, def);
         validRecords.push(rec);
-      } catch (err) {
-        console.warn(`[MinitModService] Skipping invalid saved Minit "${rec.id}":`, err);
+      } catch {
+        // Skip invalid saved Minit silently
       }
     }
     return validRecords;
@@ -352,9 +409,8 @@ export const MinitModService = {
     const def = evaluateMinitTsModule(sourceCode, normalizedFileName);
     registerMinit(def);
 
-    if (renderer) {
-      await AssetBaker.bakeSingleMinit(renderer, def);
-    }
+    // Always bake minit textures (our Canvas2D pipeline bakes standalone textures even if renderer is null)
+    await AssetBaker.bakeSingleMinit(renderer, def);
 
     const record: CustomMinitRecord = {
       id: def.id,
@@ -423,8 +479,16 @@ export function generateStarterTemplateTs(minitId = 'vortex'): string {
   const upperName = safeId.toUpperCase();
 
   return `import { MinitDef } from '../../types/game';
-import { Blueprint, Trait, Archetype } from '../../engine/blueprint';
+import { Blueprint, Trait, Archetype, pngTexture } from '../../engine/blueprint';
 import { FastMath } from '../../engine/fastMath';
+
+// 16x16 Electric Singularity Mech Base Texture (PNG Data URL)
+const ${upperName}_BASE_PNG =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAfElEQVR4nGNgwAK4+GX/Y8PY1GLVyLbtyv8Vod9RMEgMr0EwjekvfoJxndI5FAwThxmEVbPF3h94nQqSA6lBMQTZZnQD0J0MMwDFJbgMwBaABA0ABRaID2KjA5hBIDUEDcAF6GcA2V6gOBDJikaKExJVkjJVMhM2g4jJzgC5qbBoxD+2HQAAAABJRU5ErkJggg==';
+
+// 8x8 Graviton Orb VFX (PNG Data URL)
+const ${upperName}_ORB_PNG =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAYAAADED76LAAAAN0lEQVR4nGNggAK2bVf+I2MGZAASWBH6HYxhAMRGkeQX1/qPDEBiYJNgCtAB6QpwWkHQkYS8CQABXKGvM40ZJwAAAABJRU5ErkJggg==';
 
 export interface CustomMinitConfig {
   orbCount: number;
@@ -442,34 +506,35 @@ export const ${safeId}Minit: MinitDef<CustomMinitConfig, CustomMinitState> = {
   id: '${safeId}',
   name: '${upperName}',
   role: 'Singularity Excavator',
-  color: 0x00ffcc,
+  color: 0x00f0ff,
   roam: 3,
-  cd: 26,
-  desc: 'Launches twin gravitic plasma orbs that detonate on impact and fires an overdrive drill every 3rd cycle.',
+  cd: 24,
+  desc: 'Autonomous graviton singularity drone using PNG pixel art. Launches twin vortex orbs that detonate on rock impact and fires an overdrive graviton beam every 3rd cycle.',
 
   config: {
     orbCount: 2,
-    orbDmg: 22,
+    orbDmg: 24,
     blastRadius: 1,
-    beamDmg: 30,
+    beamDmg: 35,
     beamLength: 5
   },
 
-  // Supports procedural (g, c) => void OR a PNG base64 Data URL via pngTexture('data:image/png;base64,...')
   textures: {
-    base: (g, c) => {
-      g.beginFill(0x0b1320).drawRect(-7, -7, 14, 14).endFill();
-      g.lineStyle(1.5, c, 1).drawRect(-6, -6, 12, 12);
-      g.lineStyle(0).beginFill(c, 0.95).drawCircle(0, 0, 4).endFill();
-      g.beginFill(0xffffff, 1).drawRect(-1.5, -1.5, 3, 3).endFill();
-    }
+    base: pngTexture(${upperName}_BASE_PNG, {
+      width: 16,
+      height: 16,
+      scale: 1,
+      padding: 2
+    })
   },
 
   vfx: {
-    orb: (g, c) => {
-      g.beginFill(c, 0.9).drawCircle(0, 0, 4).endFill();
-      g.beginFill(0xffffff, 1).drawCircle(0, 0, 2).endFill();
-    },
+    orb: pngTexture(${upperName}_ORB_PNG, {
+      width: 8,
+      height: 8,
+      scale: 1,
+      padding: 1
+    }),
     spark: (g, c) => {
       g.beginFill(c, 1).drawRect(-1.5, -1.5, 3, 3).endFill();
     }
@@ -519,7 +584,9 @@ export const ${safeId}Minit: MinitDef<CustomMinitConfig, CustomMinitState> = {
     // Every 3rd cycle, unleash a concentrated vertical beam
     if (state.cycles % 3 === 0) {
       arena.shake = Math.max(arena.shake, 3);
-      arena.fxPool.spawnShockwave(p.px, p.py, slot.md.color, 44, 3);
+      if (arena.fxPool) {
+        arena.fxPool.spawnShockwave(p.px, p.py, slot.md.color, 44, 3);
+      }
       spawn(
         Archetype.beamVertical({
           dmg: config.beamDmg,

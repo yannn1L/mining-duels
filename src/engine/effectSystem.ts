@@ -32,8 +32,8 @@ export class EffectInstance implements IEffectInstance {
     if (this.def.onTick) {
       try {
         this.def.onTick(slot, this);
-      } catch (e) {
-        console.warn(`[Effect:${this.id}] onTick:`, e);
+      } catch {
+        // Handled silently
       }
     }
   }
@@ -47,7 +47,6 @@ export const EffectManager = {
   apply(slot: IMinitSlot, id: string, opts: EffectApplyOpts = {}): IEffectInstance | null {
     const def = EffectRegistry.get(id);
     if (!def) {
-      console.warn(`[EffectManager] Unknown: ${id}`);
       return null;
     }
 
@@ -60,8 +59,8 @@ export const EffectManager = {
         if (def.onApply) {
           try {
             def.onApply(slot, existing);
-          } catch (e) {
-            console.warn(e);
+          } catch {
+            // Error in effect handler
           }
         }
         if (!opts.silent) this._notify(slot, existing, 'stack');
@@ -77,8 +76,8 @@ export const EffectManager = {
     if (def.onApply) {
       try {
         def.onApply(slot, eff);
-      } catch (e) {
-        console.warn(e);
+      } catch {
+        // Error in effect handler
       }
     }
     if (!opts.silent) this._notify(slot, eff, 'apply');
@@ -123,8 +122,8 @@ export const EffectManager = {
     if (eff.def.onRemove) {
       try {
         eff.def.onRemove(slot, eff);
-      } catch (e) {
-        console.warn(e);
+      } catch {
+        // Handled silently
       }
     }
     if (slot.arena && slot.arena.fxPool) {

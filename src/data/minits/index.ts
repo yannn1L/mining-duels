@@ -9,6 +9,7 @@ import { lithosMinit } from './lithos';
 import { mothMinit } from './moth';
 import { sentinelMinit } from './sentinel';
 import { symbioteMinit } from './symbiote';
+import { tectonMinit } from './tecton';
 import { turretMinit } from './turret';
 
 export const MINIT_LIST: MinitDef<any, any>[] = [
@@ -20,7 +21,8 @@ export const MINIT_LIST: MinitDef<any, any>[] = [
   sentinelMinit,
   frenzyMinit,
   alchemistMinit,
-  turretMinit
+  turretMinit,
+  tectonMinit
 ];
 
 export const CORE_MINIT_IDS = new Set<string>(MINIT_LIST.map((m) => m.id));

@@ -10,11 +10,24 @@ export const MinitPreviewDataUrls: Record<string, string> = {};
  * a Minit's `textures` or `vfx` map.
  */
 export function pngTexture(
-  dataUrl: string,
-  opts: Omit<TextureDataUrlConfig, 'dataUrl'> = {}
+  dataUrlOrConfig: string | TextureDataUrlConfig,
+  opts: Omit<TextureDataUrlConfig, 'dataUrl' | 'src' | 'url'> = {}
 ): TextureDataUrlConfig {
+  if (typeof dataUrlOrConfig === 'object' && dataUrlOrConfig !== null) {
+    const rawUrl = dataUrlOrConfig.dataUrl || dataUrlOrConfig.src || dataUrlOrConfig.url || '';
+    return {
+      dataUrl: rawUrl,
+      src: rawUrl,
+      url: rawUrl,
+      ...dataUrlOrConfig,
+      ...opts
+    };
+  }
+  const rawUrl = String(dataUrlOrConfig || '');
   return {
-    dataUrl,
+    dataUrl: rawUrl,
+    src: rawUrl,
+    url: rawUrl,
     ...opts
   };
 }

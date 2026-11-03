@@ -1377,3 +1377,4 @@ export const Archetype = {
   }
 };
 
+export { pngTexture } from './textures';

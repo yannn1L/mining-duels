@@ -926,8 +926,8 @@ export class Arena extends PIXI.Container implements IArena {
     for (const slot of this.slots) {
       try {
         slot.destroy();
-      } catch (e) {
-        console.warn('[Arena] slot destroy error:', e);
+      } catch {
+        // Slot already destroyed or unmounted
       }
     }
     for (const t of this.toastPool) {

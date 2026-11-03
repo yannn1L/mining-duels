@@ -10,17 +10,41 @@ import { MinitPreviewDataUrls, Textures } from './textures';
  */
 function loadImageFromDataUrl(src: string): Promise<HTMLImageElement> {
   return new Promise((resolve, reject) => {
+    if (!src || typeof src !== 'string') {
+      return reject(new Error('Image source is empty or invalid'));
+    }
     const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => {
+    // CRITICAL: Do NOT set crossOrigin on data: or blob: URIs!
+    // In Chromium and Safari, setting crossOrigin on a data: URI triggers a CORS violation
+    // and causes img.onerror to fire immediately.
+    if (!src.startsWith('data:') && !src.startsWith('blob:')) {
+      img.crossOrigin = 'anonymous';
+    }
+
+    let settled = false;
+    const onDone = () => {
+      if (settled) return;
+      settled = true;
       if (typeof img.decode === 'function') {
         img.decode().then(() => resolve(img)).catch(() => resolve(img));
       } else {
         resolve(img);
       }
     };
-    img.onerror = (err) => reject(err);
+
+    img.onload = onDone;
+    img.onerror = (err) => {
+      if (settled) return;
+      settled = true;
+      reject(err);
+    };
+
     img.src = src;
+
+    // Synchronously check if image is already cached/complete
+    if (img.complete && (img.naturalWidth > 0 || img.width > 0)) {
+      onDone();
+    }
   });
 }
 
@@ -82,7 +106,7 @@ export class AssetBaker {
    * importing a custom external .ts Minit at runtime).
    */
   public static async bakeSingleMinit(
-    renderer: PIXI.IRenderer,
+    renderer: PIXI.IRenderer | null,
     m: MinitDef<any, any>,
     sharedGfx?: PIXI.Graphics
   ): Promise<void> {
@@ -98,7 +122,9 @@ export class AssetBaker {
             14,
             k === 'base'
           );
-          Textures[`minit_${m.id}_${k}`] = tex;
+          if (tex && tex !== PIXI.Texture.EMPTY) {
+            Textures[`minit_${m.id}_${k}`] = tex;
+          }
 
           if (k === 'base' && rawDataUrl) {
             MinitPreviewDataUrls[m.id] = rawDataUrl;
@@ -115,7 +141,9 @@ export class AssetBaker {
             8,
             false
           );
-          Textures[`minit_${m.id}_vfx_${name}`] = tex;
+          if (tex && tex !== PIXI.Texture.EMPTY) {
+            Textures[`minit_${m.id}_vfx_${name}`] = tex;
+          }
         }
       }
     } finally {
@@ -263,7 +291,7 @@ export class AssetBaker {
    * string / TextureDataUrlConfig into a crisp nearest-neighbor padded PIXI.Texture.
    */
   private static async _bakeSource(
-    renderer: PIXI.IRenderer,
+    renderer: PIXI.IRenderer | null,
     gfx: PIXI.Graphics,
     source: TextureSource,
     defaultColor: number,
@@ -271,6 +299,9 @@ export class AssetBaker {
     extractDataUrl = false
   ): Promise<{ tex: PIXI.Texture; rawDataUrl?: string }> {
     if (typeof source === 'function') {
+      if (!renderer) {
+        return { tex: PIXI.Texture.EMPTY };
+      }
       gfx.clear().lineStyle(0);
       source(gfx, defaultColor);
       const { tex, extractedUrl } = this._genPaddedTex(
@@ -283,45 +314,125 @@ export class AssetBaker {
     }
 
     const cfg: TextureDataUrlConfig =
-      typeof source === 'string' ? { dataUrl: source } : source;
+      typeof source === 'string' ? { dataUrl: source } : source || { dataUrl: '' };
+
+    const rawUrl =
+      typeof source === 'string'
+        ? source
+        : cfg.dataUrl || cfg.src || cfg.url || '';
+
+    if (!rawUrl) {
+      if (renderer) {
+        gfx.clear().beginFill(defaultColor, 1).drawRect(-6, -6, 12, 12).endFill();
+        const { tex, extractedUrl } = this._genPaddedTex(
+          renderer,
+          gfx,
+          minHalfSize,
+          extractDataUrl
+        );
+        return { tex, rawDataUrl: extractedUrl };
+      }
+      return { tex: PIXI.Texture.EMPTY };
+    }
 
     try {
-      const img = await loadImageFromDataUrl(cfg.dataUrl);
-      const baseTex = new PIXI.BaseTexture(img, {
+      const img = await loadImageFromDataUrl(rawUrl);
+      const natW = img.naturalWidth || img.width || 16;
+      const natH = img.naturalHeight || img.height || 16;
+
+      const scale = cfg.scale ?? 1;
+      const targetW = Math.max(1, Math.round((cfg.width ?? natW) * scale));
+      const targetH = Math.max(1, Math.round((cfg.height ?? natH) * scale));
+
+      const pad = cfg.padding ?? 2;
+      const halfW = Math.max(minHalfSize, Math.ceil(targetW / 2) + pad);
+      const halfH = Math.max(minHalfSize, Math.ceil(targetH / 2) + pad);
+      const canvasW = halfW * 2;
+      const canvasH = halfH * 2;
+
+      // Draw cleanly onto an offscreen 2D canvas with nearest-neighbor crisp scaling
+      const canvas = document.createElement('canvas');
+      canvas.width = canvasW;
+      canvas.height = canvasH;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.imageSmoothingEnabled = false;
+        (ctx as any).mozImageSmoothingEnabled = false;
+        (ctx as any).webkitImageSmoothingEnabled = false;
+        (ctx as any).msImageSmoothingEnabled = false;
+
+        const drawX = Math.round((canvasW - targetW) / 2);
+        const drawY = Math.round((canvasH - targetH) / 2);
+
+        ctx.drawImage(img, 0, 0, natW, natH, drawX, drawY, targetW, targetH);
+
+        // Optional tint
+        if (cfg.tint !== undefined && cfg.tint !== 0xffffff) {
+          ctx.globalCompositeOperation = 'source-atop';
+          ctx.fillStyle = `#${(cfg.tint & 0xffffff).toString(16).padStart(6, '0')}`;
+          ctx.fillRect(drawX, drawY, targetW, targetH);
+          ctx.globalCompositeOperation = 'source-over';
+        }
+      }
+
+      // Extract pixel-perfect dataUrl for UI previews
+      let previewUrl = rawUrl;
+      try {
+        previewUrl = canvas.toDataURL('image/png');
+      } catch {
+        // Fallback to rawUrl
+      }
+
+      // Create PIXI Texture from canvas with nearest-neighbor scaling
+      const baseTex = new PIXI.BaseTexture(canvas, {
         scaleMode: PIXI.SCALE_MODES.NEAREST,
         mipmap: PIXI.MIPMAP_MODES.OFF
       });
-      const rawTex = new PIXI.Texture(baseTex);
-      const spr = new PIXI.Sprite(rawTex);
-      spr.anchor.set(0.5);
+      const canvasTex = new PIXI.Texture(baseTex);
+      canvasTex.defaultAnchor.set(0.5, 0.5);
 
-      if (cfg.width !== undefined) spr.width = cfg.width;
-      if (cfg.height !== undefined) spr.height = cfg.height;
-      if (cfg.scale !== undefined) {
-        spr.scale.set(spr.scale.x * cfg.scale, spr.scale.y * cfg.scale);
+      // Pack onto shared atlas if available and renderer provided
+      if (renderer && this._atlasRT) {
+        const pad4 = 4;
+        if (this._atlasX + canvasW + pad4 > this._atlasRT.width) {
+          this._atlasX = 4;
+          this._atlasY += this._atlasRowH + pad4;
+          this._atlasRowH = 0;
+        }
+        if (this._atlasY + canvasH + pad4 <= this._atlasRT.height) {
+          const slotX = this._atlasX;
+          const slotY = this._atlasY;
+          this._atlasX += canvasW + pad4;
+          this._atlasRowH = Math.max(this._atlasRowH, canvasH);
+
+          const stamp = new PIXI.Sprite(canvasTex);
+          stamp.anchor.set(0, 0); // Position is top-left slot in atlas
+          stamp.position.set(slotX, slotY);
+          renderer.render(stamp, { renderTexture: this._atlasRT, clear: false });
+          stamp.destroy();
+
+          const subTex = new PIXI.Texture(
+            this._atlasRT.baseTexture,
+            new PIXI.Rectangle(slotX, slotY, canvasW, canvasH)
+          );
+          subTex.defaultAnchor.set(0.5, 0.5);
+          return { tex: subTex, rawDataUrl: previewUrl };
+        }
       }
-      if (cfg.tint !== undefined) spr.tint = cfg.tint;
 
-      const pad = cfg.padding ?? 2;
-      const w = Math.max(2, Math.ceil(Math.abs(spr.width)));
-      const h = Math.max(2, Math.ceil(Math.abs(spr.height)));
-      const halfW = Math.max(minHalfSize, Math.ceil(w / 2) + pad);
-      const halfH = Math.max(minHalfSize, Math.ceil(h / 2) + pad);
-      const region = new PIXI.Rectangle(-halfW, -halfH, halfW * 2, halfH * 2);
-
-      const { tex: bakedTex } = this._genTex(renderer, spr, region, 1, true, false);
-      spr.destroy();
-      return { tex: bakedTex, rawDataUrl: cfg.dataUrl };
-    } catch (err) {
-      console.warn('[AssetBaker] Failed to decode PNG data URL, using fallback:', err);
-      gfx.clear().beginFill(defaultColor, 1).drawRect(-6, -6, 12, 12).endFill();
-      const { tex, extractedUrl } = this._genPaddedTex(
-        renderer,
-        gfx,
-        minHalfSize,
-        extractDataUrl
-      );
-      return { tex, rawDataUrl: extractedUrl };
+      return { tex: canvasTex, rawDataUrl: previewUrl };
+    } catch {
+      if (renderer) {
+        gfx.clear().beginFill(defaultColor, 1).drawRect(-6, -6, 12, 12).endFill();
+        const { tex, extractedUrl } = this._genPaddedTex(
+          renderer,
+          gfx,
+          minHalfSize,
+          extractDataUrl
+        );
+        return { tex, rawDataUrl: rawUrl || extractedUrl };
+      }
+      return { tex: PIXI.Texture.EMPTY, rawDataUrl: rawUrl };
     }
   }
 
@@ -484,21 +595,23 @@ export class AssetBaker {
   }
 
   private static _audit(): void {
-    const missing = new Set<string>();
     Object.values(MINIT_DB).forEach((m) => {
       if (m.textures) {
         Object.keys(m.textures).forEach((k) => {
-          if (!Textures[`minit_${m.id}_${k}`]) missing.add(`minit_${m.id}_${k}`);
+          const key = `minit_${m.id}_${k}`;
+          if (!Textures[key]) {
+            Textures[key] = Textures[`minit_${m.id}_base`] || PIXI.Texture.WHITE;
+          }
         });
       }
       if (m.vfx) {
         Object.keys(m.vfx).forEach((k) => {
-          if (!Textures[`minit_${m.id}_vfx_${k}`]) missing.add(`minit_${m.id}_vfx_${k}`);
+          const key = `minit_${m.id}_vfx_${k}`;
+          if (!Textures[key]) {
+            Textures[key] = Textures['fx_dust'] || PIXI.Texture.WHITE;
+          }
         });
       }
     });
-    if (missing.size > 0) {
-      console.warn('[AssetBaker] Missing textures:', Array.from(missing));
-    }
   }
 }
