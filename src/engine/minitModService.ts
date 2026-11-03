@@ -280,11 +280,6 @@ export function validateMinitDef(def: any, sourceLabel = 'Minit'): void {
     );
   }
   def.id = def.id.trim().toLowerCase();
-  if (CORE_MINIT_IDS.has(def.id)) {
-    throw new Error(
-      `${sourceLabel}: id "${def.id}" is reserved by a built-in core Minit. Choose a unique id.`
-    );
-  }
   if (typeof def.name !== 'string' || def.name.trim().length === 0) {
     throw new Error(`${sourceLabel}: "name" must be a non-empty string.`);
   }

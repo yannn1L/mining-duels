@@ -571,11 +571,11 @@ export class AssetBaker {
   }
 
   private static _bakeDigits(renderer: PIXI.IRenderer): void {
-    // Bake crisp damage popup digits using Orbitron at 2x resolution onto shared Digit Atlas
+    // Bake crisp damage popup digits using Press Start 2P at 2x resolution onto shared Digit Atlas
     const style = new PIXI.TextStyle({
-      fontFamily: '"Orbitron", sans-serif',
-      fontWeight: '800',
-      fontSize: 9,
+      fontFamily: '"Press Start 2P", monospace',
+      fontWeight: 'normal',
+      fontSize: 8,
       fill: '#ffffff',
       stroke: '#000000',
       strokeThickness: 3,

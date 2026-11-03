@@ -35,7 +35,7 @@ It includes an in-browser **Dev Lab** featuring:
 | :--- | :--- | :--- |
 | **UI & State Shell** | **React 19 + TypeScript** | Menus, Roster Editor, Dev Lab Modal, Telemetry HUD, and Inspector |
 | **2D WebGL Renderer** | **PixiJS v7 (`pixi.js`)** | Hardware-accelerated, nearest-neighbor pixel-locked dual arenas |
-| **Styling & Typography** | **Tailwind CSS v4 + `Orbitron`** | Unified crisp geometric arcade typography across DOM and WebGL |
+| **Styling & Typography** | **Tailwind CSS v4 + `Press Start 2P`** | Unified authentic 8-bit arcade typography across DOM and WebGL |
 | **Audio Engine** | **Web Audio API (`AudioSystem`)** | Zero-asset procedural synthesizer with oscillators, noise & dynamics compressor |
 | **Build & Bundler** | **Vite 8** | Fast dev server and relative-path static bundle (`base: './'`) for GitHub Pages |
 
@@ -70,13 +70,13 @@ It includes an in-browser **Dev Lab** featuring:
 │   │       ├── index.ts          # Minit registry (MINIT_LIST, MINIT_DB, registerMinit, unregisterMinit)
 │   │       ├── absorb.ts         # ABSORB (Scaling Vortex)
 │   │       ├── alchemist.ts      # ALCHEMIST (Chaotic Brewmaster)
-│   │       ├── bomber.ts         # BOMBER (Heavy Demolisher)
 │   │       ├── frenzy.ts         # FRENZY (Berserker Predator)
 │   │       ├── laser.ts          # LASER (Precision Striker)
 │   │       ├── lithos.ts         # LITHOS (Crystal Collector)
 │   │       ├── moth.ts           # MOTH (Late-Game Nuker)
 │   │       ├── sentinel.ts       # SENTINEL (Orbital Commander)
 │   │       ├── symbiote.ts       # SYMBIOTE (Bio-Infester)
+│   │       ├── tecton.ts         # TECTON (Seismic Excavator - PNG Data URL)
 │   │       └── turret.ts         # TURRET (Sentry Engineer)
 │   ├── engine/
 │   │   ├── arena.ts              # Core Arena simulation, viewport block pool, damage & debug renderer
@@ -92,7 +92,7 @@ It includes an in-browser **Dev Lab** featuring:
 │   ├── types/
 │   │   └── game.ts               # Complete TypeScript interfaces for Minits, Traits, Arenas & Telemetry
 │   ├── App.tsx                   # Main application, Simulation HUD & Dev Lab Modal
-│   ├── index.css                 # Orbitron font & pixel-art canvas styles
+│   ├── index.css                 # Press Start 2P font & pixel-art canvas styles
 │   └── main.tsx                  # React root entry point
 ├── index.html
 ├── package.json

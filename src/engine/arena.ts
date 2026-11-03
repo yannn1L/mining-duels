@@ -496,9 +496,9 @@ export class Arena extends PIXI.Container implements IArena {
 
     if (this.toastPool.length < MAX_TOASTS) {
       const t = new PIXI.Text(text, {
-        fontFamily: '"Orbitron", sans-serif',
-        fontWeight: '800',
-        fontSize: 9,
+        fontFamily: '"Press Start 2P", monospace',
+        fontWeight: 'normal',
+        fontSize: 7,
         fill: numToHex(color),
         stroke: '#000000',
         strokeThickness: 3,
